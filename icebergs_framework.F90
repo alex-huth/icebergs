@@ -175,7 +175,7 @@ type :: icebergs_gridded
   integer :: id_count=-1, id_chksum=-1, id_u_iceberg=-1, id_v_iceberg=-1, id_sss=-1, id_ustar_iceberg
   integer :: id_spread_uvel=-1, id_spread_vvel=-1
   integer :: id_melt_m_per_year=-1
-  integer :: id_ocean_depth=-1
+  integer :: id_ocean_depth=-1,id_msk=-1
   !>@}
 
   real :: clipping_depth=0. !< The effective depth at which to clip the weight felt by the ocean [m].
@@ -1091,6 +1091,8 @@ if (ignore_traj) buffer_width_traj=0 ! If this is true, then all traj files shou
      'Y-stress on ice from atmosphere', 'N m^-2')
   grd%id_ocean_depth=register_diag_field('icebergs', 'Depth', axes, Time, &
      'Ocean Depth', 'm')
+  grd%id_msk=register_diag_field('icebergs', 'mask', axes, Time, &
+     'wet point mask', 'none')
 
   ! Static fields
   id_class=register_static_field('icebergs', 'lon', axes, &
@@ -1102,9 +1104,9 @@ if (ignore_traj) buffer_width_traj=0 ! If this is true, then all traj files shou
   id_class=register_static_field('icebergs', 'area', axes, &
                'cell area', 'm^2')
   if (id_class>0) lerr=send_data(id_class, grd%area(grd%isc:grd%iec,grd%jsc:grd%jec))
-  id_class=register_static_field('icebergs', 'mask', axes, &
-               'wet point mask', 'none')
-  if (id_class>0) lerr=send_data(id_class, grd%msk(grd%isc:grd%iec,grd%jsc:grd%jec))
+  !id_class=register_static_field('icebergs', 'mask', axes, &
+  !             'wet point mask', 'none')
+  !if (id_class>0) lerr=send_data(id_class, grd%msk(grd%isc:grd%iec,grd%jsc:grd%jec))
   id_class=register_static_field('icebergs', 'ocean_depth_static', axes, &
                'ocean depth static', 'm')
   if (id_class>0) lerr=send_data(id_class, grd%ocean_depth(grd%isc:grd%iec,grd%jsc:grd%jec))

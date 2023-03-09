@@ -3141,6 +3141,8 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
 
   if (grd%id_ocean_depth>0) &
     lerr=send_data(grd%id_ocean_depth, grd%ocean_depth(grd%isc:grd%iec,grd%jsc:grd%jec), Time)
+  if (grd%id_msk>0) &
+    lerr=send_data(grd%id_msk, grd%msk(grd%isc:grd%iec,grd%jsc:grd%jec), Time)
 
   if (vel_stagger == BGRID_NE) then
     ! Copy ocean and ice velocities. They are already on B-grid u-points.

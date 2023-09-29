@@ -440,6 +440,101 @@ subroutine initialize_iceberg_bonds(bergs)
 
 end subroutine initialize_iceberg_bonds
 
+subroutine initialize_bonded_bergs_from_shelf(bergs, bcount, pebl, c_id, h_shelf, h_mask)
+  type(icebergs), pointer :: bergs !< Container for all types and memory
+  integer :: bcount !< number of tabular bergs to initialize on this PE
+  real, dimension(bcount,5), intent(in) :: pebl !< list of bergs on the current PE, and their global bounds
+  integer, dimension(:,:), intent(in) :: c_id !< new tabular iceberg labels
+  real, dimension(:,:), intent(in) :: h_shelf !< ice shelf thickness field
+  real, dimension(:,:), intent(in) :: h_mask !< indicates which cells are partly
+                                             !!or fully covered by ice shelf
+  type(icebergs_gridded), pointer :: grd
+  real :: diameter, dlat, dlon, lon, lat, minlon, maxlon, minlat, maxlat
+  integer :: bcount
+
+  !Note: account for the calving mask to be between 0 and 1
+  !Initialize bergs over all cells with mask>0. Eliminate a berg if its groundfrac is greater than some threshold,
+  !or if the majority of the berg does not overlap a mask>0 cell.
+  !Then, calculate each cell's fraction of coverage by particles. If this fraction of coverage is greater
+  !than the calving fraction, try eliminating the least-bonded particle in the cell to see if that helps.
+  !If this elimination does not improve the match to the calving fraction (considering both the current cell
+  !and any other cell that the eliminated particle overlaps), then undo the elimination.
+  !Also, overlap between neighboring bergs (newly-or-previously calved) should be considered. Perhaps they can
+  !be allowed to interact, but fracture is suppressed until they have fully separated... Or maybe defining an
+  !iceberg particle configuration for each individual ice shelf would help in some way? Seems complicated.
+  !Or maybe another, adjacent, calving event cannot happen (no pressure) until the first berg drift away,
+  !to account for buttressing (this can be detected with overlap)? There should probably be some force between
+  !the shelf and a berg anyway...
+
+  ! Get the stderr unit number
+  stderrunit = stderr()
+
+  if (bergs%hexagonal_icebergs) then
+    write(stderrunit,*) 'KID, ca',i,j,xi,yj
+    call error_mesg('initialize_bonded_bergs_from_shelf',&
+      'cannot yet calve hexagonally-packed bonded bergs from ice shelves', FATAL)
+
+
+  grd=>bergs%grd
+  diameter = TC%tabular_rad
+
+  bcount = SIZE(TC%pe_berg_list,DIM=1)
+
+  if (grd%grid_is_latlon) then
+    if (bergs%hexagonal_icebergs) then
+      dlat=sqrt(3)*0.5*diameter*(180./pi)/Rearth
+    else
+      dlat=diameter*(180./pi)/Rearth
+    endif
+    dlonscale= diameter*(180./pi)/Rearth !dlon is updated according to local latitude, using dlonscale
+  else
+    if (bergs%hexagonal_icebergs) then
+      dlat=sqrt(3)*0.5*diameter
+    else
+      dlat=diameter
+    endif
+    dlon=diameter
+  endif
+
+  if (bergs%hexagonal_icebergs) dlon=d
+
+  do i = 1,bcount
+
+    minlon=TC%pe_berg_list(i,2); maxlon=min(TC%pe_berg_list(i,3),grd%lon(G%iec))
+    minlat=TC%pe_berg_list(i,4); maxlat=min(TC%pe_berg_list(i,5),grd%lat(G%jec))
+
+    lat = minlat
+    k=0
+
+    do while (lat<=maxlat)
+      k=k+1
+
+      if (lat>=grd%lat(G%jec-1)) then
+
+        if (grd%grid_is_latlon) dlon = dlonscale/cos((lat_ref)*(pi/180.))
+
+        if (bergs%hexagonal_icebergs) then
+          lon=minlon-mod(k,2)*0.5*dlon
+        else
+          lon=minlon
+        endif
+
+        do while (lon<maxlon)
+          if (lon>grd%lon(G%jec-1)) then
+
+            !add particle
+            call calve_tabular_icebergs_from_shelf(bergs, lon, lat, h_shelf, h_mask, 0.5*diameter)
+
+          endif
+          lon=lon+dlon
+        enddo
+      endif
+      lat=lat+dlat
+    enddo
+  enddo
+
+end subroutine initialize_bonded_bergs_from_shelf
+
 !> Returns metric converting grid distances to meters
 subroutine convert_from_grid_to_meters(lat_ref, grid_is_latlon, dx_dlon, dy_dlat)
   ! Arguments
@@ -6566,6 +6661,365 @@ subroutine calve_fl_icebergs(bergs,pberg,k,l_b,fl_disp_x,fl_disp_y,berg_from_bit
 
   call add_new_berg_to_list(bergs%list(cberg%ine,cberg%jne)%first, cberg)
 end subroutine calve_fl_icebergs
+
+!> Calve a tabular iceberg particle from an ice shelf at the given lat/lon coordinates
+!! and assign ice thickness and weight based on gridded ice shelf fields.
+subroutine calve_tabular_icebergs_from_shelf(bergs, lon, lat, h_shelf, h_mask, radius)
+  ! Arguments
+  type(icebergs), pointer :: bergs !< Container for all types and memory
+  real :: lon !< longitude of the new iceberg
+  real :: lat !< latitude of the new iceberg
+  real, dimension(:,:), intent(in) :: h_shelf !< ice shelf thickness field
+  real, dimension(:,:), intent(in) :: h_mask  !< indicates which cells are partly
+                                              !!or fully covered by ice shelf
+  real :: radius !< radius of the new iceberg
+  ! Local variables
+  type(icebergs_gridded), pointer :: grd
+  integer :: i,j,k,icnt,icntmax
+  type(iceberg) :: newberg
+  logical :: lret
+  real :: xi, yj, ddt, calving_to_bergs, calved_to_berg, heat_to_bergs, heat_to_berg
+  integer :: stderrunit
+  real, pointer :: initial_mass, mass_scaling, initial_thickness, initial_width, initial_length
+  logical :: allocations_done
+  type(randomNumberStream) :: rns ! Random numbers for stochastic tidal parameterization
+  real :: rx,ry
+
+  ! Get the stderr unit number
+  stderrunit = stderr()
+
+  ! For convenience
+  grd=>bergs%grd
+
+  rx = 0.; ry = 0.
+
+!  grd%real_calving(:,:,:)=0.
+!  calving_to_bergs=0.
+!  heat_to_bergs=0.
+  icntmax=0
+
+  ! allocations_done=.false.
+
+  lres=find_cell_wide(grd, lon, lat, i, j)
+
+  lret=pos_within_cell(grd, lon, lat, i, j, xi, yj)
+  if (.not.lret) then
+    write(stderrunit,*) 'KID, calve_icebergs: something went very wrong!',i,j,xi,yj
+    call error_mesg('KID, calve_icebergs', 'berg is not in the correct cell!', FATAL)
+  endif
+  if (debug.and.(xi<0..or.xi>1..or.yj<0..or.yj>1.)) then
+    write(stderrunit,*) 'KID, calve_icebergs: something went very wrong!',i,j,xi,yj
+    call error_mesg('KID, calve_icebergs', 'berg xi,yj is not correct!', FATAL)
+  endif
+  if (grd%msk(i,j)<0.5) then
+    write(stderrunit,*) 'KID, calve_icebergs: WARNING!!! Iceberg born in land cell',i,j,newberg%lon,newberg%lat
+    if (debug) call error_mesg('KID, calve_icebergs', 'Iceberg born in Land Cell!', FATAL)
+  endif
+
+  newberg%lon=lon; newberg%lat=lat
+  newberg%ine=i;   newberg%jne=j
+  newberg%xi=xi;   newberg%yj=yj
+
+  if (bergs%hexagonal_icebergs) then
+    newberg%width=sqrt((radius**2)*2*sqrt(3))
+  else
+    newberg%width=2*radius
+  endif
+
+  newberg%length=newberg%width
+
+  !interpolate gridded variables to new iceberg
+  if (grd%tidal_drift>0.) then
+    call getRandomNumbers(rns, rx)
+    call getRandomNumbers(rns, ry)
+    rx = 2.*rx - 1.; ry = 2.*ry - 1.
+  endif
+
+  call interp_flds(grd, newberg%lon, newberg%lat, i, j, xi, yj, rx, ry, newberg%uo, newberg%vo, newberg%ui, &
+    newberg%vi, newberg%ua, newberg%va, newberg%ssh_x, newberg%ssh_y, newberg%sst, newberg%sss, newberg%cn, &
+    newberg%hi, newberg%od)
+
+  call spread_grid_var_to_particle(bergs, newberg, h_shelf, i, j, xi, yj, newberg%length*newberg*width, newberg%thickness)
+
+  !update mass. TODO: make sure ice sheet has same density as berg
+  newberg%mass=newberg%thickness * newberg%width * newberg%length * bergs%rho_bergs
+
+  newberg%uvel=0.; newberg%vvel=0.
+  if (bergs%interactive_icebergs_on .or. footloose) then
+    newberg%uvel_prev=0.;        newberg%vvel_prev=0.
+    newberg%uvel_old=0.;         newberg%vvel_old=0.
+    newberg%lon_old=newberg%lon; newberg%lat_old=newberg%lat
+  endif
+  newberg%fl_k=0.
+  newberg%axn=0.; newberg%ayn=0.
+  newberg%bxn=0.; newberg%byn=0.
+
+  newberg%start_lon=newberg%lon
+  newberg%start_lat=newberg%lat
+  newberg%start_year=bergs%current_year
+  newberg%id = generate_id(grd, i, j)
+  newberg%start_day=bergs%current_yearday
+  newberg%start_mass=initial_mass
+  newberg%mass_scaling=mass_scaling
+  newberg%mass_of_bits=0.
+  newberg%mass_of_fl_bits=0.
+  newberg%mass_of_fl_bergy_bits=0.
+  newberg%halo_berg=0.
+  newberg%static_berg=0.
+  newberg%heat_density=grd%stored_heat(i,j)/grd%stored_ice(i,j,k) ! This is in J/kg
+
+  if (bergs%mts) then
+    if (.not. allocations_done) then
+      if (.not. allocated(newberg%axn_fast)) allocate(newberg%axn_fast)
+      if (.not. allocated(newberg%ayn_fast)) allocate(newberg%ayn_fast)
+      if (.not. allocated(newberg%bxn_fast)) allocate(newberg%bxn_fast)
+      if (.not. allocated(newberg%byn_fast)) allocate(newberg%byn_fast)
+      if (.not. allocated(newberg%conglom_id)) allocate(newberg%conglom_id)
+    endif
+    newberg%axn_fast=0.; newberg%ayn_fast=0.; newberg%bxn_fast=0.; newberg%byn_fast=0.; newberg%conglom_id=0
+  endif
+
+  if (bergs%iceberg_bonds_on) then
+    if (.not. allocations_done) then
+      if (.not. allocated(newberg%n_bonds))  allocate(newberg%n_bonds)
+    endif
+    newberg%n_bonds=0
+  endif
+
+  if (bergs%dem) then
+    if (.not. allocations_done) then
+      if (.not. allocated(newberg%ang_vel)) allocate(newberg%ang_vel)
+      if (.not. allocated(newberg%ang_accel)) allocate(newberg%ang_accel)
+      if (.not. allocated(newberg%rot)) allocate(newberg%rot)
+    endif
+    newberg%ang_vel=0.; newberg%ang_accel=0.; newberg%rot=0.
+  endif
+
+  call add_new_berg_to_list(bergs%list(i,j)%first, newberg)
+  ! calved_to_berg=initial_mass*mass_scaling ! Units of kg
+  ! Heat content
+  ! heat_to_berg=calved_to_berg*newberg%heat_density ! Units of J
+  ! grd%stored_heat(i,j)=grd%stored_heat(i,j)-heat_to_berg
+  ! heat_to_bergs=heat_to_bergs+heat_to_berg
+  ! ! Stored mass
+  ! grd%stored_ice(i,j,k)=grd%stored_ice(i,j,k)-calved_to_berg
+  ! calving_to_bergs=calving_to_bergs+calved_to_berg
+  ! grd%real_calving(i,j,k)=grd%real_calving(i,j,k)+calved_to_berg/bergs%dt
+
+  bergs%nbergs_calved=bergs%nbergs_calved+1
+
+  ! allocations_done=.true.
+
+!  bergs%net_calving_to_bergs=bergs%net_calving_to_bergs+calving_to_bergs
+!  bergs%net_heat_to_bergs=bergs%net_heat_to_bergs+heat_to_bergs
+
+end subroutine calve_tabular_icebergs_from_shelf
+
+
+!> Interpolate a grid variable to an iceberg particle based on the overlap of the iceberg
+!! with grid cells
+subroutine spread_grid_var_to_particle(bergs, berg, var, area_shelf_h, i, j, x, y, Area, Tn, var_fill, var_fill_zero)
+  ! Arguments
+  type(icebergs), pointer :: bergs !< Container for all types and memory
+  type(iceberg), pointer :: berg !< Berg whose mass is being considered
+  real, dimension(:,:), intent(in) :: is_var !< field
+  real, dimension(:,:), intent(in) :: area_shelf_h !< area of ice shelf that is filled
+  integer, intent(in) :: i !< i-index of cell contained center of berg
+  integer, intent(in) :: j !< j-index of cell contained center of berg
+  real, intent(in) :: x !< Longitude of berg (degree E)
+  real, intent(in) :: y !< Latitude of berg (degree N)
+  real, intent(in) :: Area !< Area of berg (m2)
+  real, intent(inout) :: Tn !< var on berg (m)
+  real, dimension(:,:), intent(in), optional :: var_fill !< area of cell that var fills
+  logical, intent(in), optional :: var_fill_zero
+  ! Local variables
+  type(icebergs_gridded), pointer :: grd
+  real :: xL, xC, xR, yD, yC, yU, Mass, L
+  real :: yDxL, yDxC, yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR
+  real :: S, H, origin_x, origin_y, x0, y0
+  real :: Area_Q1,Area_Q2 , Area_Q3,Area_Q4, Area_hex
+  real :: fraction_used !fraction of iceberg mass included (part of the mass near the boundary is discarded sometimes)
+  real :: I_fraction_used !Inverse of fraction used
+  real :: tol
+  real :: Dn, Hocean
+  real, parameter :: rho_seawater=1035.
+  integer :: stderrunit
+  logical :: debug
+  real :: orientation
+  logical :: zero_fill
+  real :: cell_frac(-1:1,-1:1)
+  ! Get the stderr unit number
+  stderrunit = stderr()
+
+!  tol=1.e-10
+  grd=>bergs%grd
+
+  !Initialize weights for each cell
+  yDxL=0.  ; yDxC=0. ; yDxR=0. ; yCxL=0. ; yCxR=0.
+  yUxL=0.  ; yUxC=0. ; yUxR=0. ; yCxC=1.
+
+  if (.not. bergs%hexagonal_icebergs) then ! Treat icebergs as rectangles of size L: (this is the default)
+
+    ! L is the non dimensional length of the iceberg [ L=(Area of berg/ Area of grid cell)^0.5 ] or something like that.
+    if (grd%area(i,j)>0) then
+      L=min( sqrt(Area / grd%area(i,j)),1.0)
+    else
+      L=1.
+    endif
+
+    xL=min(0.5, max(0., 0.5-(x/L)))
+    xR=min(0.5, max(0., (x/L)+(0.5-(1/L) )))
+    xC=max(0., 1.-(xL+xR))
+    yD=min(0.5, max(0., 0.5-(y/L)))
+    yU=min(0.5, max(0., (y/L)+(0.5-(1/L) )))
+    yC=max(0., 1.-(yD+yU))
+
+    yDxL=yD*xL*grd%msk(i-1,j-1)
+    yDxC=yD*xC*grd%msk(i  ,j-1)
+    yDxR=yD*xR*grd%msk(i+1,j-1)
+    yCxL=yC*xL*grd%msk(i-1,j  )
+    yCxR=yC*xR*grd%msk(i+1,j  )
+    yUxL=yU*xL*grd%msk(i-1,j+1)
+    yUxC=yU*xC*grd%msk(i  ,j+1)
+    yUxR=yU*xR*grd%msk(i+1,j+1)
+    yCxC=1.-( ((yDxL+yUxR)+(yDxR+yUxL)) + ((yCxL+yCxR)+(yDxC+yUxC)) )
+
+    !fraction_used=1. ! rectangular bergs do share mass with boundaries (all mass is included in cells)
+
+  else ! hexagonal
+
+    orientation=bergs%initial_orientation
+    if ((bergs%iceberg_bonds_on) .and. (bergs%rotate_icebergs_for_mass_spreading)) call find_orientation_using_iceberg_bonds(grd,berg,orientation)
+
+    if (grd%area(i,j)>0) then
+      H=min(( (sqrt(Area/(2.*sqrt(3.))) / sqrt(grd%area(i,j)))),1.) ! Non-dimensionalize element length by grid area. (This gives the non-dim Apothem of the hexagon)
+    else
+      H=(sqrt(3.)/2)*(0.49) ! Largest allowable H, since this makes S=0.49, and S has to be less than 0.5 (Not sure what the implications of this are)
+    endif
+    S=(2/sqrt(3.))*H !Side of the hexagon
+
+    if (S>0.5) then
+      ! The width of an iceberg should not be greater than half the grid cell, or else it can spread over 3 cells  (i.e. S must be less than 0.5 non-dimensionally)
+      !print 'Elements must be smaller than a whole grid cell', 'i.e.: S= ' , S , '>=0.5'
+      call error_mesg('KID, hexagonal spreading', 'Diameter of the iceberg is larger than a grid cell. Use smaller icebergs', WARNING)
+    endif
+
+    !Subtracting the position of the nearest corner from x,y  (The mass will then be spread over the 4 cells connected to that corner)
+    origin_x=1. ; origin_y=1.
+    if (x<0.5) origin_x=0.
+    if (y<0.5) origin_y=0.
+
+    !Position of the hexagon center, relative to origin at the nearest vertex
+    x0=(x-origin_x)
+    y0=(y-origin_y)
+
+    call Hexagon_into_quadrants_using_triangles(x0,y0,H,orientation,Area_hex, Area_Q1, Area_Q2, Area_Q3, Area_Q4)
+
+    if (min(min(Area_Q1,Area_Q2),min(Area_Q3, Area_Q4)) <-tol) then
+      call error_mesg('KID, hexagonal spreading', 'Intersection with hexagons should not be negative!!!', WARNING)
+      write(stderrunit,*) 'KID, yU,yC,yD', Area_Q1, Area_Q2, Area_Q3, Area_Q4
+    endif
+
+    Area_Q1=Area_Q1/Area_hex
+    Area_Q2=Area_Q2/Area_hex
+    Area_Q3=Area_Q3/Area_hex
+    Area_Q4=Area_Q4/Area_hex
+
+    !Now, you decide which quadrant belongs to which mass on ocean cell.
+    if ((x.ge. 0.5) .and. (y.ge. 0.5)) then !Top right vertex
+      yUxR=Area_Q1
+      yUxC=Area_Q2
+      yCxC=Area_Q3
+      yCxR=Area_Q4
+    elseif ((x .lt. 0.5) .and. (y.ge. 0.5)) then  !Top left vertex
+      yUxC=Area_Q1
+      yUxL=Area_Q2
+      yCxL=Area_Q3
+      yCxC=Area_Q4
+    elseif ((x.lt.0.5) .and. (y.lt. 0.5)) then !Bottom left vertex
+      yCxC=Area_Q1
+      yCxL=Area_Q2
+      yDxL=Area_Q3
+      yDxC=Area_Q4
+    elseif ((x.ge.0.5) .and. (y.lt. 0.5)) then!Bottom right vertex
+      yCxR=Area_Q1
+      yCxC=Area_Q2
+      yDxC=Area_Q3
+      yDxR=Area_Q4
+    endif
+
+    ! !Temporary for debugging reasons.
+    ! if (mpp_pe()==mpp_root_pe()) then
+    !   !write(stderrunit,*) 'KID, You are in the hexagonal domain now!!!'
+    ! endif
+
+    ! !Double check that all the mass is being used.
+    ! if ((abs(yCxC-(1.-( ((yDxL+yUxR)+(yDxR+yUxL)) + ((yCxL+yCxR)+(yDxC+yUxC)) )))>tol) .and. (mpp_pe().eq. mpp_root_pe())) then
+    !   !call error_mesg('KID, hexagonal spreading', 'All the mass is not being used!!!', WARNING)
+    !   write(stderrunit,*) 'KID, hexagonal, H,x0,y0', H, x0 , y0
+    !   write(stderrunit,*) 'KID, hexagonal, Areas',(Area_Q1+Area_Q2 + Area_Q3+Area_Q4), Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
+    !   debug=.True.
+    !   !call Hexagon_into_quadrants_using_triangles(x0,y0,H,orientation,Area_hex, Area_Q1, Area_Q2, Area_Q3, Area_Q4, debug)
+    !   call error_mesg('KID, hexagonal spreading', 'All the mass is not being used!!!', FATAL)
+    ! endif
+
+    ! !Scale each cell by (1/fraction_used) in order to redisribute ice mass which landed up on the land, back into the ocean
+    ! !Note that for the square elements, the mass has already been reassigned, so fraction_used shoule be equal to 1 aready
+    ! fraction_used= ((yDxL*grd%msk(i-1,j-1)) + (yDxC*grd%msk(i  ,j-1))  +(yDxR*grd%msk(i+1,j-1)) +(yCxL*grd%msk(i-1,j  )) +  (yCxR*grd%msk(i+1,j  ))&
+    !                +(yUxL*grd%msk(i-1,j+1)) +(yUxC*grd%msk(i  ,j+1))   +(yUxR*grd%msk(i+1,j+1)) + (yCxC**grd%msk(i,j)))
+    ! if  (berg%static_berg .eq. 1)  fraction_used=1.  !Static icebergs do not share their mass with the boundary
+    !                                             ! (this allows us to easily  initialize hexagonal icebergs in regular arrangements against boundaries)
+  endif
+  ! I_fraction_used=1./fraction_used !Invert this so that the arithmatec reprocudes
+
+  if (grd%parity_x(i,j)<0.) then
+    c1=-1
+  else
+    c1=1
+  endif
+
+  if (present(var_fill)) then
+    if (present(var_fill_zero)) then
+      if (var_fill_zero) then
+        zero_fill=.true.
+      else
+        zero_fill=.false.
+      endif
+    endif
+    do n = -1,1; m=-1,1
+      if (var_fill_zero .and. var(i+n,j+m)==0) then
+        cell_frac(m,n) = 0
+      else
+        cell_frac(m,n) = var_fill(i+m,i+n)/grd%area(i+m,j_n)
+      endif
+      berg%mass_scaling=sum(cell_frac/9)
+    enddo; enddo
+  else
+    cell_frac(:,:) = 1
+    berg%mass_scaling=1
+  endif
+
+  !Update Tn with cell-centered grid values according to overlap of iceberg and grid cells
+  Tn = 0.
+
+  Tn = var(i,j,5) &
+    + ( ( (var(i-c1,j-c1,9)*yUxR*cell_frac(-c1,-c1,9) + var(i+c1,j+c1,1)*yDxL*cell_frac(c1 ,c1,1))   &
+    +     (var(i+c1,j-c1,7)*yUxL*cell_frac( c1,-c1,7) + var(i-c1,j+c1,3)*yDxR*cell_frac(-c1,c1,3)) ) &
+    +   ( (var(i-c1,j   ,6)*yCxR*cell_frac(-c1,0  ,6) + var(i+c1,j   ,4)*yCxL*cell_frac(c1 ,0 ,4))   &
+    +     (var(i   ,j-c1,8)*yUxC*cell_frac(0  ,-c1,8) + var(i   ,j+c1,2)*yDxC*cell_frac(0  ,c1,2)) ) )
+
+
+  if (any(cell_frac.ne.1)) then
+    berg%mass_scaling = &
+      ( ( (var(i-c1,j-c1,9)*yUxR*cell_frac(-c1,-c1,9) + var(i+c1,j+c1,1)*yDxL*cell_frac(c1 ,c1,1))   &
+      +     (var(i+c1,j-c1,7)*yUxL*cell_frac( c1,-c1,7) + var(i-c1,j+c1,3)*yDxR*cell_frac(-c1,c1,3)) ) &
+      +   ( (var(i-c1,j   ,6)*yCxR*cell_frac(-c1,0  ,6) + var(i+c1,j   ,4)*yCxL*cell_frac(c1 ,0 ,4))   &
+      +     (var(i   ,j-c1,8)*yUxC*cell_frac(0  ,-c1,8) + var(i   ,j+c1,2)*yDxC*cell_frac(0  ,c1,2)) ) )
+  else
+    berg%mass_scaling=1
+  endif
+
+end subroutine spread_grid_var_to_particle
 
 !> Evolves icebergs forward by updating velocity and position with a multiple-time-step Velocity Verlet
 !! scheme. Experimental option: each short/long step can be iterated until a given convergence tolerance

@@ -193,6 +193,11 @@ type :: icebergs_gridded
   real, dimension(:,:,:), pointer :: area_on_ocean=>null() !< Area distribution partitioned by neighbor (m^2)
   real, dimension(:,:,:), pointer :: Uvel_on_ocean=>null() !< zonal velocity distribution partitioned by neighbor (m^2* m/s)
   real, dimension(:,:,:), pointer :: Vvel_on_ocean=>null() !< meridional momentum distribution partitioned by neighbor (m^2 m/s)
+  real, dimension(:,:,:), pointer :: pf_area=>null() !< neighbor-partioned cell fraction of partially-filled calving bonded-bergs
+  real, dimension(:,:,:), pointer :: frac_cberg_calved=>null() !< neighbor-partioned cell fraction of fully-calved bonded bergs
+                                                               !! from ice sheet x cell area (m^2)
+  real, dimension(:,:,:), pointer :: frac_cberg=>null() !< neighbor-partioned cell fraction of partially-calved bonded bergs
+                                                        !! from ice sheet x cell area (m^2)
   real, dimension(:,:), pointer :: tmp=>null() !< Temporary work space
   real, dimension(:,:), pointer :: tmpc=>null() !< Temporary work space
   real, dimension(:,:,:), pointer :: stored_ice=>null() !< Accumulated ice mass flux at calving locations (kg)
@@ -203,7 +208,6 @@ type :: icebergs_gridded
   real, dimension(:,:), pointer :: iceberg_heat_content=>null() !< Distributed heat content of bergs (J/m^2)
   real, dimension(:,:), pointer :: parity_x=>null() !< X component of vector point from i,j to i+1,j+1 (for detecting tri-polar fold)
   real, dimension(:,:), pointer :: parity_y=>null() !< Y component of vector point from i,j to i+1,j+1 (for detecting tri-polar fold)
-  real, dimension(:,:), pointer :: frac_shelf_h=>null() !< Fraction of grid cells covered by ice shelf
   integer, dimension(:,:), pointer :: iceberg_counter_grd=>null() !< Counts icebergs created for naming purposes
   logical :: rmean_calving_initialized = .false. !< True if rmean_calving(:,:) has been filled with meaningful data
   logical :: rmean_calving_hflx_initialized = .false. !< True if rmean_calving_hflx(:,:) has been filled with meaningful data
@@ -226,6 +230,7 @@ type :: icebergs_gridded
   integer :: id_ocean_depth=-1, id_ice_sheet_basins=-1, id_melt_by_ice_sheet_basin=-1
   integer :: id_melt_by_class=-1, id_melt_buoy_fl=-1, id_melt_eros_fl=-1, id_melt_conv_fl=-1
   integer :: id_fl_parent_melt=-1, id_fl_child_melt=-1
+  integer :: id_calve_mask=-1, id_h_shelf=-1, id_frac_shelf_h=-1, id_frac_cberg_calved=-1, id_frac_cberg=-1
   !>@}
 
   real :: clipping_depth=0. !< The effective depth at which to clip the weight felt by the ocean [m].
@@ -432,6 +437,7 @@ type :: icebergs !; private !Niki: Ask Alistair why this is private. ice_bergs_i
   type(linked_list), pointer :: new_tabular_list !< Linked list of particles used when calving bonded icebergs from ice shelves
   type(xyt), pointer :: trajectories=>null() !< A linked list for detached segments of trajectories
   type(bond_xyt), pointer :: bond_trajectories=>null() !< A linked list for detached segments of bond trajectories
+  type(tabular_calving_state), pointer :: TC=>null() !< Structure that describes the ice shelf tabular calving state
   real :: dt !< Time-step between iceberg calls
              !! \todo Should make dt adaptive?
   integer :: current_year !< Current year (years)
@@ -622,7 +628,9 @@ type :: icebergs !; private !Niki: Ask Alistair why this is private. ice_bergs_i
   character(len=11) :: fl_style='new_bergs' !< Evolve footloose bergs individually as 'new_bergs', or as a group with size 'fl_bits'
   logical :: fl_bits_erosion_to_bergy_bits=.true. !< Erosion from footloose bits becomes bergy bits
   real :: new_berg_from_fl_bits_mass_thres=1.e12 ! Create a new berg from FL bits when mass_of_fl_bits exceeds this value
-
+  !Bonded-berg calving from ice shelves
+  real :: constant_radius_IS_berg=0. !< particle radius for iKID particles that calve from ice shelves
+  logical :: snap_tabular_calving_to_bonded_grid=.true. !align tabular particles that calve from ice shelves with a constant cartesian grid
   !backwards compatibility
   logical :: old_interp_flds_order=.false. !< Use old order of when to interpolate grid variables to bergs. Will be false if MTS, DEM, or footloose
   logical :: tabular_calving=.false.
@@ -654,7 +662,7 @@ contains
 subroutine ice_bergs_framework_init(bergs, &
              gni, gnj, layout, io_layout, axes, dom_x_flags, dom_y_flags, &
              dt, Time, ice_lon, ice_lat, ice_wet, ice_dx, ice_dy, ice_area, &
-             cos_rot, sin_rot, frac_shelf_h, ocean_depth, maskmap, fractional_area)
+             cos_rot, sin_rot, ocean_depth, maskmap, fractional_area, tabular_calving)
 
 use mpp_parameter_mod, only: SCALAR_PAIR, CGRID_NE, BGRID_NE, CORNER, AGRID
 use mpp_domains_mod, only: mpp_update_domains, mpp_define_domains
@@ -691,7 +699,6 @@ real, dimension(:,:), intent(in) :: ice_dy !< Meridional length of cell on easte
 real, dimension(:,:), intent(in) :: ice_area !< Area of cells (m^2, or non-dim is fractional_area=True)
 real, dimension(:,:), intent(in) :: cos_rot !< Cosine from rotation matrix to lat-lon coords
 real, dimension(:,:), intent(in) :: sin_rot !< Sine from rotation matrix to lat-lon coords
-real, dimension(:,:), intent(in) :: frac_shelf_h !< Fraction of each grid cell covered by ice shelf
 real, dimension(:,:), intent(in),optional :: ocean_depth !< Depth of ocean bottom (m)
 logical, intent(in), optional :: maskmap(:,:) !< Masks out parallel cores
 logical, intent(in), optional :: fractional_area !< If true, ice_area contains cell area as fraction of entire spherical surface
@@ -838,7 +845,9 @@ logical :: displace_fl_bergs=.true. ! footloose berg positions are randomly assi
 character(len=11) :: fl_style='new_bergs' ! Evolve footloose bergs individually as 'fl_bits', or as a group with size 'bergy_bits' or 'mean_size'
 logical :: fl_bits_erosion_to_bergy_bits=.true. ! Erosion from footloose bits becomes bergy bits
 real :: new_berg_from_fl_bits_mass_thres=1.e12 ! Create a new berg from FL bits when mass_of_fl_bits exceeds this value
-
+!Bonded-berg calving from ice shelves
+real :: constant_radius_IS_berg=0. !< particle radius for iKID particles that calve from ice shelves
+logical :: snap_tabular_calving_to_bonded_grid=.true. !align tabular particles that calve from ice shelves with a constant cartesian grid
 
 namelist /icebergs_nml/ verbose, budget, halo,  traj_sample_hrs, initial_mass, traj_write_hrs, max_bonds, save_short_traj,traj_name,bond_traj_name,&
          traj_area_thres, Static_icebergs,distribution, mass_scaling, initial_thickness, verbose_hrs, spring_coef,bond_coef,&
@@ -862,8 +871,8 @@ namelist /icebergs_nml/ verbose, budget, halo,  traj_sample_hrs, initial_mass, t
          debug_write,cdrag_grounding,h_to_init_grounding,frac_thres_scaling,frac_thres_n,frac_thres_t,save_bond_traj,&
          remove_unused_bergs,force_convergence,explicit_inner_mts,convergence_tolerance,dem,ignore_tangential_force,poisson,&
          dem_spring_coef,dem_damping_coef,dem_beam_test,constant_interaction_LW,constant_length,constant_width,&
-         fl_init_child_xy_by_pe, footloose,displace_fl_bergs,&
-         fl_style,fl_bits_erosion_to_bergy_bits, save_fl_traj,&
+         constant_radius_IS_berg, fl_init_child_xy_by_pe, footloose,displace_fl_bergs,&
+         fl_style,fl_bits_erosion_to_bergy_bits, save_fl_traj, snap_tabular_calving_to_bonded_grid, &
          new_berg_from_fl_bits_mass_thres,separate_distrib_for_n_hemisphere,&
          initial_mass_n, distribution_n, mass_scaling_n, initial_thickness_n,&
          fl_youngs, fl_strength,  save_all_traj_year, save_nonfl_traj_by_class,&
@@ -1005,6 +1014,9 @@ real :: dx,dy,dx_dlon,dy_dlat,lat_ref2,lon_ref
   allocate( grd%area_on_ocean(grd%isd:grd%ied, grd%jsd:grd%jed, 9) ); grd%area_on_ocean(:,:,:)=0.
   allocate( grd%Uvel_on_ocean(grd%isd:grd%ied, grd%jsd:grd%jed, 9) ); grd%Uvel_on_ocean(:,:,:)=0.
   allocate( grd%Vvel_on_ocean(grd%isd:grd%ied, grd%jsd:grd%jed, 9) ); grd%Vvel_on_ocean(:,:,:)=0.
+  allocate( grd%pf_area(grd%isd:grd%ied, grd%jsd:grd%jed, 9) ); grd%pf_area(:,:,:)=0.
+  allocate( grd%frac_cberg_calved(grd%isd:grd%ied, grd%jsd:grd%jed, 9) ); grd%frac_cberg_calved(:,:,:)=0.
+  allocate( grd%frac_cberg(grd%isd:grd%ied, grd%jsd:grd%jed, 9) ); grd%frac_cberg(:,:,:)=0.
   allocate( grd%stored_ice(grd%isd:grd%ied, grd%jsd:grd%jed, nclasses) ); grd%stored_ice(:,:,:)=0.
   allocate( grd%rmean_calving(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%rmean_calving(:,:)=0.
   allocate( grd%rmean_calving_hflx(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%rmean_calving_hflx(:,:)=0.
@@ -1074,7 +1086,6 @@ real :: dx,dy,dx_dlon,dy_dlat,lat_ref2,lon_ref
   grd%msk(is:ie,js:je)=ice_wet(:,:)
   grd%cos(is:ie,js:je)=cos_rot(:,:)
   grd%sin(is:ie,js:je)=sin_rot(:,:)
-  grd%frac_shelf_h(is:ie,js:je)=frac_shelf_h(:,:)
 
   call mpp_update_domains(grd%lon, grd%domain, position=CORNER)
   call mpp_update_domains(grd%lat, grd%domain, position=CORNER)
@@ -1085,7 +1096,6 @@ real :: dx,dy,dx_dlon,dy_dlat,lat_ref2,lon_ref
   call mpp_update_domains(grd%sin, grd%domain, position=CORNER)
   call mpp_update_domains(grd%ocean_depth, grd%domain)
   call mpp_update_domains(grd%parity_x, grd%parity_y, grd%domain, gridtype=AGRID) ! If either parity_x/y is -ve, we need rotation of vectors
-  call mpp_update_domains(grd%frac_shelf_h, grd%domain)
 
   ! Sanitize lon and lat in the southern halo
   do j=grd%jsc-1,grd%jsd,-1; do i=grd%isd,grd%ied
@@ -1490,6 +1500,8 @@ endif
       endif
     endif
   endif
+  bergs%constant_radius_IS_berg=constant_radius_IS_berg
+  bergs%snap_tabular_calving_to_bonded_grid=snap_tabular_calving_to_bonded_grid
   bergs%ocean_drag_scale=ocean_drag_scale
   ! Footloose calving parameters
   bergs%footloose=footloose
@@ -1554,6 +1566,8 @@ endif
           'tabular calving requires (mts .and. dem .and. (.not. old_interp_flds_order))!', FATAL)
       endif
     endif
+  else
+    bergs%tabular_calving=.false.
   endif
   !necessary?
   if (.not. mts) then
@@ -1723,7 +1737,18 @@ endif
      'Melt rate of footloose parent bergs', 'kg/(m^2*s)')
   grd%id_fl_child_melt=register_diag_field('icebergs', 'fl_child_melt', axes, Time, &
      'Melt rate of footloose child bergs', 'kg/(m^2*s)')
-
+  if (bergs%tabular_calving) then
+    grd%id_calve_mask=register_diag_field('icebergs', 'calve_mask', axes, Time, &
+       'Mask for tabular calving (calve if >=1)', 'none')
+    grd%id_h_shelf=register_diag_field('icebergs', 'h_shelf', axes, Time, &
+       'Ice shelf thickness field', 'm')
+    grd%id_frac_shelf_h=register_diag_field('icebergs', 'frac_shelf_h', axes, Time, &
+       'Cell fraction covered by ice shelf', 'none')
+    grd%id_frac_cberg_calved=register_diag_field('icebergs', 'frac_cberg_calved', axes, Time, &
+       'Cell fraction of fully-calved tabular bonded bergs', 'none')
+    grd%id_frac_cberg=register_diag_field('icebergs', 'frac_cberg', axes, Time, &
+       'Cell fraction of partially-calved tabular bonded bergs', 'none')
+  endif
   ! Static fields
   id_class=register_static_field('icebergs', 'lon', axes, &
                'longitude (corners)', 'degrees_E')
@@ -2182,7 +2207,8 @@ logical :: halo_debugging
 
 end subroutine update_halo_icebergs
 
-!> Adds newly-calved tabular icebergs from neighbor processors to the halo lists with calved tabular icebergs from neighbor processers
+!> Adds newly-calved tabular icebergs from neighbor processors to the halo lists with calved
+!! tabular icebergs from neighbor processers
 subroutine update_halo_calved_tabular_icebergs(bergs)
 ! Arguments
 type(icebergs), pointer :: bergs !< Container for all types and memory
@@ -2222,7 +2248,7 @@ logical :: halo_debugging
     this=>bergs%list(grdi,grdj)%first
     do while (associated(this))
     !write(stderrunit,*)  'sending east', this%id, this%ine, this%jne, mpp_pe()
-      if (this%static_berg.ne.2) then
+      if (this%static_berg<2) then
         this=>this%next
         cycle
       else
@@ -2241,7 +2267,7 @@ logical :: halo_debugging
   do grdj = grd%jsc,grd%jec ; do grdi = grd%isc,grd%isc+halo_width-1
     this=>bergs%list(grdi,grdj)%first
     do while (associated(this))
-      if (this%static_berg.ne.2) then
+      if (this%static_berg<2) then
         this=>this%next
         cycle
       else
@@ -2316,7 +2342,7 @@ logical :: halo_debugging
   do grdj = grd%jec-halo_width+2,grd%jec ; do grdi = grd%isd,grd%ied
     this=>bergs%list(grdi,grdj)%first
     do while (associated(this))
-      if (this%static_berg.ne.2) then
+      if (this%static_berg<2) then
         this=>this%next
         cycle
       else
@@ -2335,7 +2361,7 @@ logical :: halo_debugging
   do grdj = grd%jsc,grd%jsc+halo_width-1 ; do grdi = grd%isd,grd%ied
     this=>bergs%list(grdi,grdj)%first
     do while (associated(this))
-      if (this%static_berg.ne.2) then
+      if (this%static_berg<2) then
         this=>this%next
         cycle
       else

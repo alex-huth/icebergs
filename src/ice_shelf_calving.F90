@@ -706,7 +706,7 @@ module ice_shelf_tabular_calving
     !call transfer_mts_bergs(bergs)
 
     !3)
-    !If you have a partially-filled grid cells at the ice front (hmask==2), then we could end up with multiple
+    !If you have a partially-filled grid cells at the ice front (ice shelf CS%hmask==2), then we could end up with multiple
     !rows of partially-filled particles, which we do not want:
     !e.g. In the 1D example below, particles `cc` and `dd` may both end up as partially-filled because they both
     !     overlap the partially-filled grid cell with hmask==2. Instead, this partial fill should be fully given to
@@ -721,13 +721,18 @@ module ice_shelf_tabular_calving
     !contribute pressure to the ocean surface vs ice shelf pressure (to account for the transition between these
     !two pressures over a specified time scale).
     !Eliminate bergs that are at the end of this transition time and which have zero thickness.
-    !frac_shelf_H is typically returned to the ice shelf code unchanged, where it is used for ice shelf dynamics.
-    !However, for calculating ice shelf pressure on the ocean, the fraction of ice shelf in the cell becomes
+
+    !For calculating ice shelf pressure on the ocean, the fraction of ice shelf in the cell becomes
     !modified as frac_shelf_H-frac_cberg, where frac_cberg will be 0 at the start of the transition time between
     !ice shelf and iceberg, and 1 at the end.
 
-    !At the end, the calving mask is updated to eliminate the mask associated with the calved berg, and frac_shelf_H
-    !is also updated? Need to go through this carefully so we know which fields to pass...
+    !TODO: ice shelf calving mask could also be fractional over cells that have both calve and no-calve MPs.
+
+    !Calving mask must stay constant until calving is over, which can be detected when a cell obtains a value of
+    !frac_cberg_calved>0. Then, eliminate the calving mask there. Probably easiest to allow multiple calving
+    !masks on the same PE, but not if they are touching. Simply allow the first calving event to finish before
+    !starting the second...
+
     call new_tabular_bergs_thickness_and_pressure(bergs, h_shelf, frac_shelf_h, frac_cberg_calved, frac_cberg)
 
     !needed?
@@ -769,9 +774,8 @@ module ice_shelf_tabular_calving
     !from the edge particles to the interior particles to fill the interior particles completely.
 
     grd=>bergs%grd
-    count=1 !number of bonds a partially-full particle is away from a full particle
-    max_count=0
-
+    grd%frac_cberg_calved(:,:,:)=0.
+    grd%frac_cberg(:,:,:)=0.
 
     !now that all bergs are initialized and bonded, all static_berg statuses should be positive
     do grdj = grd%jsd,grd%jed ; do grdi = grd%isd,grd%ied
@@ -782,24 +786,24 @@ module ice_shelf_tabular_calving
       enddo
     enddo; enddo
 
+    !1) Determine how many bonds away from an initially "full" particle (completely overlaps filled ice shelf cells)
+    !   each initially partially-full particle is. Partial fill particles closer to a full particle will preferentially
+    !   be filled with ice shelf mass first, so that they can actually end up converting to full particles and only
+    !   the outermost edge of a conglomerate will contain partially-full particles.
 
-    !1) Determine how many bonds away from a full particle each partially-full particle is.
-    !   This routine assumes that there are no conglomerates with only partially-full particles.
+    count=1 !number of bonds a partially-full particle is away from a full particle
+    max_count=0
+
     do grdj = grd%jsd,grd%jed ; do grdi = grd%isd,grd%ied ! only process conglomerates overlapping the comp domain
       berg=>bergs%list(grdi,grdj)%first
       do while (associated(berg)) ! loop over all bergs
-
-        !new bergs initialized this time step were originally marked with negative static_berg to identify them
-        !during bonding. At this point they should have positive static_berg
-        berg%static_berg=abs(berg%static_berg)
-        bergs%new_tabular_list%first=>null()
-        bergs%new_tabular_list=>null()
-        !this field is used to track how many bonds away from a full particle the current particle is
-        berg%sss=0
-        !Start from a particle (static_berg==2)
+        !Start from a full particle (static_berg==2)
         !Processed bergs have their IDs set negative
-        if (berg%static_berg>1 .and. berg%static_berg<3 .and. berg%id>0) then
+        if (berg%static_berg==2 .and. berg%id>0) then
+          bergs%new_tabular_list%first=>null()
+          bergs%new_tabular_list=>null()
           !returns a list of partially-full particles that are directly connected to full particles (i.e. count==1)
+          berg%id=-berg%id
           call make_list_of_bonded_to_full(bergs,berg,berg%new_tabular_list%first)
           if (associated(berg%new_tabular_list%first)) then
             !For partially-full particles that are not directly bonded to a full particle
@@ -813,23 +817,47 @@ module ice_shelf_tabular_calving
       enddo
     enddo; enddo
 
-    !reset berg ids
-    do grdj = grd%jsc-1,grd%jec+1 ; do grdi = grd%isc-1,grd%iec+1
+    !Also process conglomerates without any initially "full" particles. In this case, any partial-fill
+    !particle that overlaps a full ice shelf cell will be given count==1 (as if it is one bond away from an
+    !initially filled particle.
+    do grdj = grd%jsd,grd%jed ; do grdi = grd%isd,grd%ied
       berg=>bergs%list(grdi,grdj)%first
-      do while (associated(berg))
-        berg%id=abs(berg%id)
+      do while (associated(berg)) ! loop over all bergs
+        if ((berg%static_berg==2.5) .and. berg%id>0) then
+          bergs%new_tabular_list%first=>null()
+          bergs%new_tabular_list=>null()
+          !this berg is partially-filled and overlaps a full ice shelf cell,
+          !but does not eventually connect to a full particle
+          !We can treat it as if it is bonded to a full particle
+          berg%id=-berg%id
+          count=2 !to make sure that max_count will be >=1
+          call make_list_of_bonded_to_full(bergs,berg,berg%new_tabular_list%first)
+          if (associated(berg%new_tabular_list%first)) then
+            call assign_bonds_from_full(bergs,berg%new_tabular_list%first,count)
+            max_count=max(count-1,max_count)
+          endif
+        endif
         berg=>berg%next
       enddo
     enddo; enddo
 
+    call mpp_max(max_count)
 
-    grd%frac_cberg_calved(:,:,:)=0.
-    grd%frac_cberg(:,:,:)=0.
+    if (max_count==0) then
+      !reset all berg ids
+      !(if max_count>0, this is done elsewhere)
+      do grdj = grd%jsd,grd%jed ; do grdi = grd%isd,grd%ied
+        berg=>bergs%list(grdi,grdj)%first
+        do while (associated(berg))
+          berg%id=abs(berg%id)
+          berg=>berg%next
+        enddo
+    enddo; enddo
 
     if (max_count>0) then
 
       !2) use the gridded field "pf_area" field to calculate the total area of
-      !   partially-full particles in each cell that are a
+      !   (initially) partially-full particles in each cell that are a
       !   certain "count" of bounds away from a full particle
       allocate(pf_area(grd%isd:grd%ied,grd%jsd:grd%jed,max_count), source=0.0)
 
@@ -839,7 +867,7 @@ module ice_shelf_tabular_calving
           berg=>bergs%list(grdi,grdj)%first
           do while (associated(berg))
             berg%id=abs(berg%id)
-            if (berg%static_berg==3 .and. int(berg%sss)==count) then
+            if (berg%static_berg<3 .and. int(berg%sss)==count) then
               !            call insert_tabular_particle_into_list(berg%new_tabular_list%first,berg)
 
               !add berg area in cell to pf_area
@@ -868,19 +896,20 @@ module ice_shelf_tabular_calving
       !   There is a separate scaling for each "count" category.
       do grdj = grd%jsc-1,grd%jec+1 ; do grdi = grd%isc-1,grd%iec+1
         resid_area = frac_shelf_h(grdi,grdj) * grd%area
-        !TODO: the above resid_area should be 
         do count=1,max_count
-          if (pf_area(grdi,grdj,count)<resid_area) then
-            !There is more cell area than area within the cell from overlapping particles with the current "count"
-            !These particles will have a scaling factor of 1 from this cell
-            resid_area=resid_area-pf_temp
-            pf_area(grdi,grdj,count)=1
-          else
-            !The area within the cell from overlapping particles with the current "count" exceeds the remaining cell area.
-            !These particles will have a scaling factor less than 1 from this cell
-            pf_area(grdi,grdj,count)=resid_area/pf_area(grdi,grdj,count)
-            if (count<max_count) pf_area(grdi,grdj,(count+1):max_count)=0
-            exit
+          if (pf_area(grdi,grdj,count)>0) then
+            if (pf_area(grdi,grdj,count)<resid_area) then
+              !There is more cell area than area within the cell from overlapping particles with the current "count"
+              !These particles will have a scaling factor of 1 from this cell
+              resid_area=resid_area-pf_area(grdi,grdj,count)
+              pf_area(grdi,grdj,count)=1
+            else
+              !The area within the cell from overlapping particles with the current "count" >= the remaining cell area.
+              !These particles will have a scaling factor <= 1 from this cell
+              pf_area(grdi,grdj,count)=resid_area/pf_area(grdi,grdj,count)
+              if (count<max_count) pf_area(grdi,grdj,(count+1):max_count)=0
+              exit
+            endif
           endif
         enddo
       enddo; enddo
@@ -917,18 +946,20 @@ module ice_shelf_tabular_calving
         if (berg%static_berg<3) then !Fully-filled bergs, or bergs that overlap a full cell:
 
           if (berg%static_berg==2) then
-            berg%mass_scaling = 1
-          else
-            berg%mass_scaling =
-          endif
-          
+          !TODO: h_shelf should be calculated by routing the ice shelf mass to the icebergs module, then using the icebergs density
+          ! and frac_shelf_h, i.e. here, h_shelf = IS_mass/(frac_shelf_h * cell_area * rho_bergs)
+          ! This H may be different than the ice shelf H if iceberg density is different that ice shelf density
+          ! But, z_b will be the same.
+
+          berg%mass_scaling = 1
+
           berg%thickness =   yCxC*h_shelf(i   ,j   ) + &
                           (((yUxL*h_shelf(i-c1,j+c1) + yDxR*h_shelf(i+c1,j-c1))  + &
                             (yUxR*h_shelf(i+c1,j+c1) + yDxL*h_shelf(i-c1,j-c1))) + &
                            ((yUxC*h_shelf(i   ,j+c1) + yDxC*h_shelf(i   ,j-c1))  + &
                             (yCxL*h_shelf(i-c1,j   ) + yCxR*h_shelf(i+c1,j   ))))/ berg%mass_scaling
 
-        elseif (berg%static_berg==3) then !Partially-full bergs:
+        elseif (berg%static_berg>2) then !Initially partially-full bergs:
 
           count=int(berg%sss)
 
@@ -1398,14 +1429,15 @@ module ice_shelf_tabular_calving
     endif
   end subroutine calving_tabular_particle_grid_overlap
 
-  !> Returns a list of partially-full bergs connected to full bergs, and the id of the berg at the end of this list
+  !> Returns a list of partially-full bergs connected to full bergs
   recursive subroutine make_list_of_bonded_to_full(bergs,berg,first)
     type(icebergs), pointer :: bergs !< Container for all types and memory
     type(iceberg), pointer :: berg !< Berg to process
-    type(iceberg), pointer :: this !< The first berg to add to the tabular list
+    type(iceberg), pointer :: first !< The first berg in the list of tabular bergs
     ! Local variables
     type(bond), pointer :: current_bond
 
+    berg%sss=0
     current_bond=>berg%first_bond
     do while (associated(current_bond))
       if  (associated(current_bond%other_berg)) then
@@ -1413,11 +1445,11 @@ module ice_shelf_tabular_calving
         if (other_berg%id>0) then
           !this berg has not been processed
           other_berg%id=-other_berg%id
-          if (berg%static_berg>3) then
+          if (other_berg%static_berg==2) then
             call make_list_of_bonded_to_full(bergs, other_berg, first)
           else
             call insert_tabular_particle_into_list(first, other_berg)
-            other_berg%sss=1
+            other_berg%sss=1 !Marks the berg as 1 bond away from a filled berg
           endif
         endif
       endif
@@ -1425,12 +1457,49 @@ module ice_shelf_tabular_calving
     enddo
   end subroutine make_list_of_bonded_to_full
 
+  !> This is the same as make_list_of_bonded_to_full except the list is of bergs bonded to
+  !! bergs with static_berg=2.5 (partially-full, and not eventually connecting to a full berg,
+  !! but overlapping a full ice shelf grid cell).
+  recursive subroutine make_list_of_bonded_to_full2(bergs,berg,first)
+    type(icebergs), pointer :: bergs !< Container for all types and memory
+    type(iceberg), pointer :: berg !< Berg to process
+    type(iceberg), pointer :: first !< The first berg in the list of tabular bergs
+    ! Local variables
+    type(bond), pointer :: current_bond
+
+    berg%sss=1
+    current_bond=>berg%first_bond
+    do while (associated(current_bond))
+      if  (associated(current_bond%other_berg)) then
+        other_berg=>current_bond%other_berg
+        if (other_berg%id>0) then
+          !this berg has not been processed
+          other_berg%id=-other_berg%id
+          if (other_berg%static_berg==2.5) then
+            call make_list_of_bonded_to_full2(bergs, other_berg, first)
+          elseif (other_berg%static_berg==2) then
+            call insert_tabular_particle_into_list(first, other_berg)
+            !The parent berg with static_berg=2.5 is treated as if it is 1 bond away from a filled berg
+            !(even though it is not). Bergs with static_berg=2 that are bonded to the parent berg are
+            !marked so that they are treated as if they are 2 bonds away from a filled berg.
+            other_berg%sss=2
+          else
+            write(stderrunit,*) 'KID, make_list_of_bonded_to_full2: something went very wrong!', other_berg%static_berg
+            call error_msg('KID, make_list_of_bonded_to_full2',&
+              'Error in determining bonds away from the active ice front!!', FATAL)
+          endif
+        endif
+      endif
+      current_bond=>current_bond%next_bond
+    enddo
+  end subroutine make_list_of_bonded_to_full2
+
   !> Determine how many bonds away from a full particle each partially-full particle is.
-  recursive subroutine assign_bonds_from_full(bergs,berg,first,count)
+  subroutine assign_bonds_from_full(bergs,berg,first,count)
     type(icebergs), pointer :: bergs !< Container for all types and memory
     type(iceberg), pointer :: berg !< Berg to process
     type(iceberg), pointer :: this !< The first berg to add to the tabular list
-    integer :: last_id !< Lat Berg ID in the tabular berg list with count
+    integer :: count !> tracks number of bonds away from a "full" particle
     ! Local variables
     type(bond), pointer :: current_bond
     type(iceberg), pointer :: other_berg, prev_berg
@@ -1452,8 +1521,8 @@ module ice_shelf_tabular_calving
         current_bond=>current_bond%next_bond
       enddo
       prev_berg=>berg
-      if (associated(berg%next_tab)) then
-        berg=>berg%next_tab
+      if (associated(berg%next_t)) then
+        berg=>berg%next_t
       else
         !the end of the list has been reached. Restart from the beginning of the list,
         !which may have new bergs added
@@ -1461,6 +1530,7 @@ module ice_shelf_tabular_calving
         count=count+1
       endif
       !Delete the berg that was just processed from the list
+      !If it is at the start of the list, the the whole list is nullified.
       call delete_tabular_particle_from_list(first, prev_berg)
     enddo
   end subroutine assign_bonds_from_full

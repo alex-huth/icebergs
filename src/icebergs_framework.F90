@@ -301,6 +301,8 @@ end type xyt
 type :: iceberg
   type(iceberg), pointer :: prev=>null() !< Previous link in list
   type(iceberg), pointer :: next=>null() !< Next link in list
+  type(iceberg), pointer :: prev_t=>null() !< Previous link in list used for tabular calving from ice shelves
+  type(iceberg), pointer :: next_t=>null() !< Next     link in list used for tabular calving from ice shelves
   ! State variables (specific to the iceberg, needed for restarts)
   real :: lon !< Longitude of berg (degree N or unit of grid coordinate)
   real :: lat !< Latitude of berg (degree E or unit of grid coordinate)
@@ -4649,38 +4651,37 @@ end subroutine insert_berg_into_list
 !> Inserts a berg into the front of a list of tabular iceberg particles
 subroutine insert_tabular_particle_into_list(first, newberg)
 ! Arguments
-type(iceberg), pointer :: first !< List of bergs
+type(iceberg), pointer :: first !< The first berg in the list of tabular bergs
 type(iceberg), pointer :: newberg !< New berg to insert
-integer, optional :: last_id !< First id in the list with required count
-! Local variables
-type(iceberg), pointer :: this, prev
 
   if (associated(first)) then
-    newberg%next_tab=>first
-    newberg%prev_tab=>null()
-    first%prev_tab=>newberg
+    !must be inserted at front of the list
+    newberg%next_t=>first
+    newberg%prev_t=>null()
+    first%prev_t=>newberg
     first=>newberg
   else
     ! list is empty so create it
     first=>newberg
-    first%next_tab=>null()
-    first%prev_tab=>null()
+    first%next_t=>null()
+    first%prev_t=>null()
   endif
 
 end subroutine insert_tabular_particle_into_list
 
 !> Remove a berg from the list of tabular iceberg particles
 subroutine delete_tabular_particle_from_list(first, berg)
-! Arguments
+  ! Arguments
+type(iceberg), pointer :: first !< List of tabular bergs
 type(iceberg), pointer :: berg !< Berg to be deleted
 ! Local variables
 
   ! Connect neighbors to each other
-  if (associated(berg%prev)) berg%prev_tab%next_tab=>berg%next_tab
-  if (associated(berg%next_tab)) berg%next_tab%prev_tab=>berg%prev_tab
+  if (associated(berg%prev_t)) berg%prev_t%next_t=>berg%next_t
+  if (associated(berg%next_t)) berg%next_t%prev_t=>berg%prev_t
 
-  berg%prev_tab=>NULL()
-  berg%next_tab=>NULL()
+  berg%prev_t=>NULL()
+  berg%next_t=>NULL()
 
   if (berg%id.eq.first%id) first=>NULL()
 end subroutine delete_tabular_particle_from_list

@@ -95,7 +95,7 @@ contains
 subroutine icebergs_init(bergs, &
              gni, gnj, layout, io_layout, axes, dom_x_flags, dom_y_flags, &
              dt, Time, ice_lon, ice_lat, ice_wet, ice_dx, ice_dy, ice_area, &
-             cos_rot, sin_rot, frac_shelf_h, ocean_depth, maskmap, fractional_area, tabular_calving)
+             cos_rot, sin_rot, ocean_depth, maskmap, fractional_area, tabular_calving)
   ! Arguments
   type(icebergs), pointer :: bergs !< Container for all types and memory
   integer, intent(in) :: gni !< Number of global points in i-direction
@@ -115,7 +115,6 @@ subroutine icebergs_init(bergs, &
   real, dimension(:,:), intent(in) :: ice_area !< Area of cells (m^2, or non-dim is fractional_area=True)
   real, dimension(:,:), intent(in) :: cos_rot !< Cosine from rotation matrix to lat-lon coords
   real, dimension(:,:), intent(in) :: sin_rot !< Sine from rotation matrix to lat-lon coords
-  real, dimension(:,:), intent(in) :: frac_shelf_h !< Fraction of grid cell filled by ice shelf
   real, dimension(:,:), intent(in),optional :: ocean_depth !< Depth of ocean bottom (m)
   logical, intent(in), optional :: maskmap(:,:) !< Masks out parallel cores
   logical, intent(in), optional :: fractional_area !< If true, ice_area contains cell area as fraction of entire spherical surface
@@ -134,7 +133,7 @@ subroutine icebergs_init(bergs, &
   call ice_bergs_framework_init(bergs, &
              gni, gnj, layout, io_layout, axes, dom_x_flags, dom_y_flags, &
              dt, Time, ice_lon, ice_lat, ice_wet, ice_dx, ice_dy, ice_area, &
-             cos_rot, sin_rot, frac_shelf_h, ocean_depth=ocean_depth, maskmap=maskmap, &
+             cos_rot, sin_rot, ocean_depth=ocean_depth, maskmap=maskmap, &
              fractional_area=fractional_area, tabular_calving=tabular_calving)
 
   grd=>bergs%grd
@@ -5279,7 +5278,7 @@ end subroutine calculate_sum_over_bergs_diagnositcs
 !> The main driver the steps updates icebergs
 subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh, sst, calving_hflx, cn, hi, &
                         stagger, stress_stagger, sss, mass_berg, ustar_berg, area_berg, &
-                        calve_mask, h_shelf, frac_shelf_h, frac_cberg_calved, frac_cberg)
+                        calve_mask, mass_shelf, frac_shelf_h, frac_cberg_calved, frac_cberg)
   ! Arguments
   type(icebergs), pointer :: bergs !< Container for all types and memory
   type(time_type), intent(in) :: time !< Model time
@@ -5302,7 +5301,7 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   real, dimension(:,:), optional, pointer :: ustar_berg !< Friction velocity on base of bergs (m/s)
   real, dimension(:,:), optional, pointer :: area_berg !< Area of bergs (m2)
   real, dimension(:,:), optional, intent(in)  :: calve_mask        !< Mask for calving of tabular bonded bergs
-  real, dimension(:,:), optional, intent(in)  :: h_shelf           !< The ice shelf thickness field (m)
+  real, dimension(:,:), optional, intent(in)  :: mass_shelf        !< The ice shelf mass field (kg)
   real, dimension(:,:), optional, intent(in)  :: frac_shelf_h      !< The fraction of each grid cell covered by
                                                                    !! the ice shelf [nondim]
   real, dimension(:,:), optional, intent(out) :: frac_cberg_calved !< Cell fraction of fully-calved bonded bergs from
@@ -5585,7 +5584,12 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
     else
       TC=>bergs%TC
       TC%calve_mask(grd%isc:grd%iec,grd%jsc:grd%jec)   = calve_mask(:,:)
-      TC%h_shelf(grd%isc:grd%iec,grd%jsc:grd%jec)      = h_shelf(:,:)
+      !TC%h_shelf is the ice shelf thickness as calculated from ice shelf mass, but using iceberg density
+      !If ice shelf and iceberg density differ, TC%h_shelf will still produce the same basal elevation
+      !(assuming floatation) as  ice shelf thickness calculated using ice shelf density. However, the
+      !respective surface elevations may differ.
+      TC%h_shelf(grd%isc:grd%iec,grd%jsc:grd%jec)      = mass_shelf(:,:)/(frac_shelf_h(:,:) * &
+                                                         grd%area(grd%isc:grd%iec,grd%jsc:grd%jec) * bergs%rho_bergs)
       TC%frac_shelf_h(grd%isc:grd%iec,grd%jsc:grd%jec) = frac_shelf_h(:,:)
       call mpp_update_domains(TC%calve_mask, grd%domain)
       call mpp_update_domains(TC%h_shelf, grd%domain)

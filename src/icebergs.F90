@@ -5278,7 +5278,7 @@ end subroutine calculate_sum_over_bergs_diagnositcs
 !> The main driver the steps updates icebergs
 subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh, sst, calving_hflx, cn, hi, &
                         stagger, stress_stagger, sss, mass_berg, ustar_berg, area_berg, &
-                        calve_mask, mass_shelf, frac_shelf_h, frac_cberg_calved, frac_cberg)
+                        calve_mask, mass_shelf, frac_shelf_h, frac_cberg, frac_cberg_calved)
   ! Arguments
   type(icebergs), pointer :: bergs !< Container for all types and memory
   type(time_type), intent(in) :: time !< Model time
@@ -5304,9 +5304,9 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   real, dimension(:,:), optional, intent(in)  :: mass_shelf        !< The ice shelf mass field (kg)
   real, dimension(:,:), optional, intent(in)  :: frac_shelf_h      !< The fraction of each grid cell covered by
                                                                    !! the ice shelf [nondim]
-  real, dimension(:,:), optional, intent(out) :: frac_cberg_calved !< Cell fraction of fully-calved bonded bergs from
-                                                                   !! the ice sheet [nondim]
   real, dimension(:,:), optional, intent(out) :: frac_cberg        !< Cell fraction of partially-calved bonded bergs from
+                                                                   !! the ice sheet [nondim]
+  real, dimension(:,:), optional, intent(out) :: frac_cberg_calved !< Cell fraction of fully-calved bonded bergs from
                                                                    !! the ice sheet [nondim]
   ! Local variables
   type(tabular_calving_state) :: TC
@@ -5578,10 +5578,17 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
 
   ! Initialize fields needed for tabular calving of bonded bergs from ice shelves
   if (bergs%tabular_calving) then
-    if (.not. (present(calve_mask) .and. present(h_shelf) .and. present(frac_shelf_h) &
+    if (.not. (present(calve_mask) .and. present(mass_shelf) .and. present(frac_shelf_h) &
                .and. present(frac_cberg_calved) .and. present(frac_cberg) )) then
       call error_mesg('KID, icebergs_run', 'Not all tabular calving variables are not present!', FATAL)
     else
+      if (.not. (associated(calve_mask) .and. associated(mass_shelf) .and. associated(frac_shelf_h) &
+          .and. associated(frac_cberg_calved) .and. associated(frac_cberg) )) then
+        write(stderrunit,*) 'KID, icebergs_run', 'associated: calve_mask ', associated(calve_mask), &
+          ', mass_shelf ',associated(mass_shelf),', frac_shelf_h ',associated(frac_shelf_h),&
+          ', frac_cberg_calved ',associated(frac_cberg_calved),', frac_cberg ',associated(frac_cberg)
+        call error_mesg('KID, icebergs_run', 'Not all tabular calving variables are associated!', FATAL)
+      endif
       TC=>bergs%TC
       TC%calve_mask(grd%isc:grd%iec,grd%jsc:grd%jec)   = calve_mask(:,:)
       !TC%h_shelf is the ice shelf thickness as calculated from ice shelf mass, but using iceberg density

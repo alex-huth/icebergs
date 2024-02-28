@@ -19,7 +19,7 @@ module ice_shelf_tabular_calving
                                      !! 0: not ready to calve
                                      !! >1: ready to calve
       h_shelf => NULL(), &           !< The ice shelf thickness field (m)
-      frac_shelf_h => NULL(), &      !< The fraction of each grid cell covered by ice shelf [nondim]
+      frac_shelf => NULL(), &        !< The fraction of each grid cell covered by ice shelf [nondim]
       frac_cberg_calved => NULL(), & !< Cell fraction of fully-calved bonded bergs from the ice sheet [nondim]
       frac_cberg => NULL()           !< Cell fraction of partially-calved bonded bergs from the ice sheet [nondim]
 
@@ -50,7 +50,7 @@ module ice_shelf_tabular_calving
     allocate(TC%c_id(grd%isd:grd%ied,grd%jsd:grd%jed)             , source=0.0 )
     allocate(TC%calve_mask(grd%isd:grd%ied,grd%jsd:grd%jed)       , source=0.0 )
     allocate(TC%h_shelf(grd%isd:grd%ied,grd%jsd:grd%jed)          , source=0.0 )
-    allocate(TC%frac_shelf_h(grd%isd:grd%ied,grd%jsd:grd%jed)     , source=0.0 )
+    allocate(TC%frac_shelf(grd%isd:grd%ied,grd%jsd:grd%jed)       , source=0.0 )
     allocate(TC%frac_cberg_calved(grd%isd:grd%ied,grd%jsd:grd%jed), source=0.0 )
     allocate(TC%frac_cberg(grd%isd:grd%ied,grd%jsd:grd%jed)       , source=0.0 )
   end subroutine initialize_tabular_calving
@@ -65,30 +65,19 @@ module ice_shelf_tabular_calving
     if (allocated(TC%c_id))              deallocate(TC%c_id)
     if (allocated(TC%calve_mask))        deallocate(TC%calve_mask)
     if (allocated(TC%h_shelf))           deallocate(TC%h_shelf)
-    if (allocated(TC%frac_shelf_h))      deallocate(TC%frac_shelf_h)
+    if (allocated(TC%frac_shelf))        deallocate(TC%frac_shelf)
     if (allocated(TC%frac_cberg_calved)) deallocate(TC%frac_cberg_calved)
     if (allocated(TC%frac_cberg))        deallocate(TC%frac_cberg)
     if (allocated(TC))                   deallocate(TC)
   end subroutine ice_shelf_calving_end
 
   !>  routine to initialize iKID icebergs from a tabular calving mask, called from icebergs_run
-  subroutine process_tabular_calving(bergs, TC, h_shelf, frac_shelf_h, frac_cberg_calved, frac_cberg)
+  subroutine process_tabular_calving(bergs)
     ! Arguments
     type(icebergs), pointer :: bergs !< Container for all types and memory
     type(tabular_calving_state), pointer :: TC !< A pointer to the tabular calving structure
-    type(time_type),       intent(in)    :: Time !< The current model time
-    real, dimension(:,:), intent(in)    :: h_shelf !< The ice shelf thickness field (m)
-    real, dimension(:,:), intent(in)    :: frac_shelf_h !< The fraction of each grid cell covered by
-                                                        !! the ice shelf [nondim]
-    real, dimension(:,:), intent(out) :: frac_cberg_calved !< Cell fraction of fully-calved bonded bergs from
-                                                           !! the ice sheet [nondim]
-    real, dimension(:,:), intent(out) :: frac_cberg !< Cell fraction of partially-calved bonded bergs from
-                                                    !! the ice sheet [nondim]
-    ! Local variables
-    integer :: max_TC_mask, i,j
 
-    type(tabular_calving_state) :: TC
-
+    TC => bergs%TC
     if (allocated(TC%berg_list)) deallocate(TC%berg_list)
 
     !First, update the tabular calving mask
@@ -160,7 +149,7 @@ module ice_shelf_tabular_calving
     call tabular_berg_info(bergs%grd, TC)
 
     !4) Initialize iKID icebergs over these bounds, and remove excess particles. Call this from SIS2?
-    call ice_shelf_to_bonded_bergs(bergs, TC, h_shelf, frac_shelf_h, frac_cberg_calved, frac_cberg)
+    call ice_shelf_to_bonded_bergs(bergs, TC)
 
   end subroutine process_tabular_calving
 
@@ -524,18 +513,10 @@ module ice_shelf_tabular_calving
   !! its corresponding gridded iceberg mask. This approach guarantees consistent iceberg initialization across PEs
   !! Pressure on the ocean is slowly transitioned between ice shelf and iceberg over time, so also returns
   !! the fraction to reduce shelf pressure
-  subroutine ice_shelf_to_bonded_bergs(bergs, TC, h_shelf, frac_shelf_h, frac_cberg_calved, frac_cberg)
+  subroutine ice_shelf_to_bonded_bergs(bergs, TC)
     type(icebergs), pointer :: bergs !< Container for all types and memory
-    integer :: bcount !< number of tabular bergs to initialize on this PE
-
-    real, dimension(:,:), intent(in) :: h_shelf !< The ice shelf thickness field (m)
-    real, dimension(:,:), intent(in) :: frac_shelf_h !< The fraction of a grid cell covered by
-                                                     !! the ice shelf [nondim].
-    real, dimension(:,:), intent(out) :: frac_cberg_calved !< Cell fraction of fully-calved bonded bergs
-                                                           !! from the ice sheet [nondim]
-    real, dimension(:,:), intent(out) :: frac_cberg !< Cell fraction of partially-calved bonded bergs
-                                                    !! from the ice sheet [nondim]
     type(tabular_calving_state), pointer :: TC !< A pointer to the tabular calving structure
+    integer :: bcount !< number of tabular bergs to initialize on this PE
     type(icebergs_gridded), pointer :: grd
     real :: diameter, dlat, dlon, lon, lat, minlon, maxlon, minlat, maxlat
     real :: minx, miny, cos_lat_ref
@@ -680,7 +661,7 @@ module ice_shelf_tabular_calving
                 !then save its overlapping area with neighboring cells. Its thickness and scaling will be determined
                 !below in new_tabular_bergs_thickness_and_pressure.
                 call begin_calving_tabular_iceberg_from_shelf(bergs, lon, lat, &
-                                                              TC%calve_mask, TC%frac_shelf_h, 0.5*diameter)
+                                                              TC%calve_mask, TC%frac_shelf, 0.5*diameter)
 
               endif
               lon=lon+dlon
@@ -723,7 +704,7 @@ module ice_shelf_tabular_calving
     !Eliminate bergs that are at the end of this transition time and which have zero thickness.
 
     !For calculating ice shelf pressure on the ocean, the fraction of ice shelf in the cell becomes
-    !modified as frac_shelf_H-frac_cberg, where frac_cberg will be 0 at the start of the transition time between
+    !modified as frac_shelf-frac_cberg, where frac_cberg will be 0 at the start of the transition time between
     !ice shelf and iceberg, and 1 at the end.
 
     !TODO: ice shelf calving mask could also be fractional over cells that have both calve and no-calve MPs.
@@ -733,7 +714,7 @@ module ice_shelf_tabular_calving
     !masks on the same PE, but not if they are touching. Simply allow the first calving event to finish before
     !starting the second...
 
-    call new_tabular_bergs_thickness_and_pressure(bergs, h_shelf, frac_shelf_h, frac_cberg_calved, frac_cberg)
+    call new_tabular_bergs_thickness_and_pressure(bergs, TC%h_shelf, TC%frac_shelf, TC%frac_cberg_calved, TC%frac_cberg)
 
     !needed?
     nbonds=0
@@ -745,10 +726,10 @@ module ice_shelf_tabular_calving
 
   !> Calculates thickness new bonded-particle calved from an ice shelf. Also calculates pressure scaling for particles
   !! and ice shelf as the calving part of the ice shelf transitions to bonded bergs over time.
-  subroutine new_tabular_bergs_thickness_and_pressure(bergs, h_shelf, frac_shelf_h, frac_cberg_calved, frac_cberg)
+  subroutine new_tabular_bergs_thickness_and_pressure(bergs, h_shelf, frac_shelf, frac_cberg_calved, frac_cberg)
     type(icebergs), pointer :: bergs !< Container for all types and memory
     real, dimension(:,:), intent(in) :: h_shelf !< The ice shelf thickness field (m)
-    real, dimension(:,:), intent(in) :: frac_shelf_h !< The fraction of a grid cell covered by
+    real, dimension(:,:), intent(in) :: frac_shelf !< The fraction of a grid cell covered by
                                                      !! the ice shelf [nondim].
     real, dimension(:,:), intent(out) :: frac_cberg_calved !< Cell fraction of fully-calved bonded bergs from
                                                            !! the ice sheet [nondim]
@@ -768,7 +749,7 @@ module ice_shelf_tabular_calving
 
     !A newly-calving iKID conglomerate may have both edge particles (i.e. with empty bond pairs) and
     !interior particles (i.e. with no empty bond pairs) that both overlap partially-filled ice-shelf
-    !cells (where 0<frac_shelf_h<1). Consequently, these particles are only partially filled
+    !cells (where 0<frac_shelf<1). Consequently, these particles are only partially filled
     !(defined as having berg%mass_scaling<1) during the interpolation of gridded ice shelf fields to the
     !particles. However, only edge particles should be partially-filled, so here, some mass is transferred
     !from the edge particles to the interior particles to fill the interior particles completely.
@@ -895,7 +876,7 @@ module ice_shelf_tabular_calving
       !   grid thickness to the particles and determining mass scaling of the particles.
       !   There is a separate scaling for each "count" category.
       do grdj = grd%jsc-1,grd%jec+1 ; do grdi = grd%isc-1,grd%iec+1
-        resid_area = frac_shelf_h(grdi,grdj) * grd%area
+        resid_area = frac_shelf(grdi,grdj) * grd%area
         do count=1,max_count
           if (pf_area(grdi,grdj,count)>0) then
             if (pf_area(grdi,grdj,count)<resid_area) then
@@ -947,7 +928,7 @@ module ice_shelf_tabular_calving
 
           if (berg%static_berg==2) then
           !TODO: h_shelf should be calculated by routing the ice shelf mass to the icebergs module, then using the icebergs density
-          ! and frac_shelf_h, i.e. here, h_shelf = IS_mass/(frac_shelf_h * cell_area * rho_bergs)
+          ! and frac_shelf, i.e. here, h_shelf = IS_mass/(frac_shelf * cell_area * rho_bergs)
           ! This H may be different than the ice shelf H if iceberg density is different that ice shelf density
           ! But, z_b will be the same.
 
@@ -1003,16 +984,16 @@ module ice_shelf_tabular_calving
         !--interp to grid only from calving bergs (cberg) with T_scale==1--
         !frac_cberg_calved = sum(INTERP(cberg%area * cberg%mass_scaling))/cell_area !fraction of cell pressure
                                                                                     !from calving bergs
-        !--Then, permanently adjust frac_shelf_h as--:
-        !frac_shelf_h = max(frac_shelf_h - frac_cberg_calved,0).
-        !--If frac_shelf_h == 0, adjust ice thickness, hmask, etc accordingly.
+        !--Then, permanently adjust frac_shelf as--:
+        !frac_shelf = max(frac_shelf - frac_cberg_calved,0).
+        !--If frac_shelf == 0, adjust ice thickness, hmask, etc accordingly.
         !(2) Process calving bergs with T_scale<1:
         !--interp to the grid only from calving bergs (cberg) without T_scale==1 (these bergs have not fully-calved yet)--
         !cberg%mass_scaling=cberg%mass_scaling * T_scale
         !frac_cberg        = sum(INTERP(cberg%area * cberg%mass_scaling))/cell_area !fraction of cell pressure
                                                                                     !from calving bergs
-        !--Then, implement frac_shelf_h as--:
-        !frac_shelf_h_new = max(frac_shelf_h - frac_cberg,0)
+        !--Then, implement frac_shelf as--:
+        !frac_shelf_new = max(frac_shelf - frac_cberg,0)
         !(3) When interpolation time is up, the calving mask and associated ice shelf needs to be eliminated
 
         if (T_scale==1) then !berg is old enough to now evolve as a dynamic berg, but will be deleted if massless
@@ -1059,13 +1040,13 @@ module ice_shelf_tabular_calving
   !> Initialize (begin calving) a tabular iceberg particle from an ice shelf at the given lat/lon coordinates.
   !! Save its overlapping area withvneighboring cells, which will be used to determine its
   !! thickness, mass, and mass scaling in subroutine new_tabular_berg_thickness_and_pressure
-  subroutine begin_calving_tabular_iceberg_from_shelf(bergs, lon, lat, calve_mask, frac_shelf_h, radius)
+  subroutine begin_calving_tabular_iceberg_from_shelf(bergs, lon, lat, calve_mask, frac_shelf, radius)
     ! Arguments
     type(icebergs), pointer :: bergs !< Container for all types and memory
     real :: lon !< longitude of the new iceberg
     real :: lat !< latitude of the new iceberg
     real, dimension(:,:), intent(in) :: calve_mask !< ice shelf calving mask
-    real, dimension(:,:), intent(in) :: frac_shelf_h !< The fraction of a grid cell covered by
+    real, dimension(:,:), intent(in) :: frac_shelf !< The fraction of a grid cell covered by
                                                      !! the ice shelf [nondim].
     real :: radius !< radius of the new iceberg
     ! Local variables
@@ -1103,7 +1084,7 @@ module ice_shelf_tabular_calving
 
     !Assume that the calve mask spans over the cells that shelf associated with the berg may advect into
     !Get rid of bergs that clearly do not overlap the calve mask
-    if (all(frac_shelf_h(i-1:i+1,j-1:j+1)==0) .and. all(calve_mask(i-1:i+1,j-1:j+1)==0)) return
+    if (all(frac_shelf(i-1:i+1,j-1:j+1)==0) .and. all(calve_mask(i-1:i+1,j-1:j+1)==0)) return
 
     lret=pos_within_cell(grd, lon, lat, i, j, xi, yj)
     if (.not.lret) then
@@ -1151,20 +1132,19 @@ module ice_shelf_tabular_calving
     if (pmask<=0) return
 
     !Full particles or particles that overlap a full cell get static_berg=-2
-    !Particles that 
     !Partially-full particles that do not overlap a full cell get static_berg=-3
     !After these bergs receive their bonds, they get static_berg=abs(static_berg)
     newberg%static_berg=-2
     if (pmask<1) then
-      if ((yCxC>0 .and. calve_mask(i   ,j   )>0 .and. frac_shelf_h(i   ,j   )==1) .or. &
-          (yUxL>0 .and. calve_mask(i-c1,j+c1)>0 .and. frac_shelf_h(i-c1,j+c1)==1) .or. &
-          (yDxR>0 .and. calve_mask(i+c1,j-c1)>0 .and. frac_shelf_h(i+c1,j-c1)==1) .or. &
-          (yUxR>0 .and. calve_mask(i+c1,j+c1)>0 .and. frac_shelf_h(i+c1,j+c1)==1) .or. &
-          (yDxL>0 .and. calve_mask(i-c1,j-c1)>0 .and. frac_shelf_h(i-c1,j-c1)==1) .or. &
-          (yUxC>0 .and. calve_mask(i   ,j+c1)>0 .and. frac_shelf_h(i   ,j+c1)==1) .or. &
-          (yDxC>0 .and. calve_mask(i   ,j-c1)>0 .and. frac_shelf_h(i   ,j-c1)==1) .or. &
-          (yCxL>0 .and. calve_mask(i-c1,j   )>0 .and. frac_shelf_h(i-c1,j   )==1) .or. &
-          (yCxR>0 .and. calve_mask(i+c1,j   )>0 .and. frac_shelf_h(i+c1,j   )==1)) then
+      if ((yCxC>0 .and. calve_mask(i   ,j   )>0 .and. frac_shelf(i   ,j   )==1) .or. &
+          (yUxL>0 .and. calve_mask(i-c1,j+c1)>0 .and. frac_shelf(i-c1,j+c1)==1) .or. &
+          (yDxR>0 .and. calve_mask(i+c1,j-c1)>0 .and. frac_shelf(i+c1,j-c1)==1) .or. &
+          (yUxR>0 .and. calve_mask(i+c1,j+c1)>0 .and. frac_shelf(i+c1,j+c1)==1) .or. &
+          (yDxL>0 .and. calve_mask(i-c1,j-c1)>0 .and. frac_shelf(i-c1,j-c1)==1) .or. &
+          (yUxC>0 .and. calve_mask(i   ,j+c1)>0 .and. frac_shelf(i   ,j+c1)==1) .or. &
+          (yDxC>0 .and. calve_mask(i   ,j-c1)>0 .and. frac_shelf(i   ,j-c1)==1) .or. &
+          (yCxL>0 .and. calve_mask(i-c1,j   )>0 .and. frac_shelf(i-c1,j   )==1) .or. &
+          (yCxR>0 .and. calve_mask(i+c1,j   )>0 .and. frac_shelf(i+c1,j   )==1)) then
 
         newberg%static_berg=-2.5
       else
@@ -1193,7 +1173,7 @@ module ice_shelf_tabular_calving
 
     !TODO within this routine, save a list of soon-to-calve tabular bergs for each grid cell, with their area in the cell.
     !or save area in a cell on the particle...
-    ! call spread_grid_var_to_particle(bergs, newberg, h_shelf, i, j, xi, yj, newberg%thickness, var_frac=frac_shelf_h)
+    ! call spread_grid_var_to_particle(bergs, newberg, h_shelf, i, j, xi, yj, newberg%thickness, var_frac=frac_shelf)
 
     ! !TODO no need for this until timestep where bergs are released, with the exception of OD, perhaps?
     ! call interp_flds(grd, newberg%lon, newberg%lat, i, j, xi, yj, rx, ry, newberg%uo, newberg%vo, newberg%ui, &

@@ -5250,7 +5250,7 @@ end subroutine calculate_sum_over_bergs_diagnositcs
 !> The main driver the steps updates icebergs
 subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh, sst, calving_hflx, cn, hi, &
                         stagger, stress_stagger, sss, mass_berg, ustar_berg, area_berg, &
-                        calve_mask, mass_shelf, frac_shelf_h, frac_cberg, frac_cberg_calved)
+                        calve_mask, mass_shelf, area_shelf, frac_cberg, frac_cberg_calved)
   ! Arguments
   type(icebergs), pointer :: bergs !< Container for all types and memory
   type(time_type), intent(in) :: time !< Model time
@@ -5273,9 +5273,9 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   real, dimension(:,:), optional, pointer :: ustar_berg !< Friction velocity on base of bergs (m/s)
   real, dimension(:,:), optional, pointer :: area_berg !< Area of bergs (m2)
   real, dimension(:,:), optional, intent(in)  :: calve_mask        !< Mask for calving of tabular bonded bergs
-  real, dimension(:,:), optional, intent(in)  :: mass_shelf        !< The ice shelf mass field (kg)
-  real, dimension(:,:), optional, intent(in)  :: frac_shelf_h      !< The fraction of each grid cell covered by
-                                                                   !! the ice shelf [nondim]
+  real, dimension(:,:), optional, intent(in)  :: mass_shelf        !< The ice shelf mass/cell area (kg m-2)
+  real, dimension(:,:), optional, intent(in)  :: area_shelf        !< The area of each grid cell covered by
+                                                                   !! the ice shelf [m2]
   real, dimension(:,:), optional, intent(out) :: frac_cberg        !< Cell fraction of partially-calved bonded bergs from
                                                                    !! the ice sheet [nondim]
   real, dimension(:,:), optional, intent(out) :: frac_cberg_calved !< Cell fraction of fully-calved bonded bergs from
@@ -5549,29 +5549,28 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
 
   ! Initialize fields needed for tabular calving of bonded bergs from ice shelves
   if (bergs%tabular_calving) then
-    if (.not. (present(calve_mask) .and. present(mass_shelf) .and. present(frac_shelf_h) &
+    if (.not. (present(calve_mask) .and. present(mass_shelf) .and. present(area_shelf) &
                .and. present(frac_cberg_calved) .and. present(frac_cberg) )) then
       call error_mesg('KID, icebergs_run', 'Not all tabular calving variables are not present!', FATAL)
     else
-      if (.not. (associated(calve_mask) .and. associated(mass_shelf) .and. associated(frac_shelf_h) &
+      if (.not. (associated(calve_mask) .and. associated(mass_shelf) .and. associated(area_shelf) &
           .and. associated(frac_cberg_calved) .and. associated(frac_cberg) )) then
         write(stderrunit,*) 'KID, icebergs_run', 'associated: calve_mask ', associated(calve_mask), &
-          ', mass_shelf ',associated(mass_shelf),', frac_shelf_h ',associated(frac_shelf_h),&
+          ', mass_shelf ',associated(mass_shelf),', area_shelf ',associated(area_shelf),&
           ', frac_cberg_calved ',associated(frac_cberg_calved),', frac_cberg ',associated(frac_cberg)
         call error_mesg('KID, icebergs_run', 'Not all tabular calving variables are associated!', FATAL)
       endif
       TC=>bergs%TC
-      TC%calve_mask(grd%isc:grd%iec,grd%jsc:grd%jec)   = calve_mask(:,:)
+      TC%calve_mask(grd%isc:grd%iec,grd%jsc:grd%jec) = calve_mask(:,:)
       !TC%h_shelf is the ice shelf thickness as calculated from ice shelf mass, but using iceberg density
       !If ice shelf and iceberg density differ, TC%h_shelf will still produce the same basal elevation
       !(assuming floatation) as  ice shelf thickness calculated using ice shelf density. However, the
       !respective surface elevations may differ.
-      TC%h_shelf(grd%isc:grd%iec,grd%jsc:grd%jec)      = mass_shelf(:,:)/(frac_shelf_h(:,:) * &
-                                                         grd%area(grd%isc:grd%iec,grd%jsc:grd%jec) * bergs%rho_bergs)
-      TC%frac_shelf_h(grd%isc:grd%iec,grd%jsc:grd%jec) = frac_shelf_h(:,:)
+      TC%frac_shelf(grd%isc:grd%iec,grd%jsc:grd%jec) = area_shelf(:,:)/grd%area(grd%isc:grd%iec,grd%jsc:grd%jec)
+      TC%h_shelf(grd%isc:grd%iec,grd%jsc:grd%jec)    = mass_shelf(:,:)/(TC%frac_shelf(grd%isc:grd%iec,grd%jsc:grd%jec) * bergs%rho_bergs)
       call mpp_update_domains(TC%calve_mask, grd%domain)
       call mpp_update_domains(TC%h_shelf, grd%domain)
-      call mpp_update_domains(TC%frac_shelf_h, grd%domain)
+      call mpp_update_domains(TC%frac_shelf, grd%domain)
       TC%frac_cberg_calved(:,:) = 0.0
       TC%frac_cberg(:,:) = 0.0
     endif
@@ -5862,8 +5861,8 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
     lerr=send_data(grd%id_calve_mask, TC%calve_mask(grd%isc:grd%iec,grd%jsc:grd%jec), Time)
   if (grd%id_h_shelf>0) &
     lerr=send_data(grd%id_h_shelf, TC%h_shelf(grd%isc:grd%iec,grd%jsc:grd%jec), Time)
-  if (grd%id_frac_shelf_h>0) &
-    lerr=send_data(grd%id_frac_shelf_h, TC%frac_shelf_h(grd%isc:grd%iec,grd%jsc:grd%jec), Time)
+  if (grd%id_frac_shelf>0) &
+    lerr=send_data(grd%id_frac_shelf, TC%frac_shelf(grd%isc:grd%iec,grd%jsc:grd%jec), Time)
   if (grd%id_frac_cberg_calved>0) &
     lerr=send_data(grd%id_frac_cberg_calved, TC%frac_cberg_calved(grd%isc:grd%iec,grd%jsc:grd%jec), Time)
   if (grd%id_frac_cberg>0) &

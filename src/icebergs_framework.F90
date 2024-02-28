@@ -230,7 +230,7 @@ type :: icebergs_gridded
   integer :: id_ocean_depth=-1, id_ice_sheet_basins=-1, id_melt_by_ice_sheet_basin=-1
   integer :: id_melt_by_class=-1, id_melt_buoy_fl=-1, id_melt_eros_fl=-1, id_melt_conv_fl=-1
   integer :: id_fl_parent_melt=-1, id_fl_child_melt=-1
-  integer :: id_calve_mask=-1, id_h_shelf=-1, id_frac_shelf_h=-1, id_frac_cberg_calved=-1, id_frac_cberg=-1
+  integer :: id_calve_mask=-1, id_h_shelf=-1, id_frac_shelf=-1, id_frac_cberg_calved=-1, id_frac_cberg=-1
   !>@}
 
   real :: clipping_depth=0. !< The effective depth at which to clip the weight felt by the ocean [m].
@@ -1744,7 +1744,7 @@ endif
        'Mask for tabular calving (calve if >=1)', 'none')
     grd%id_h_shelf=register_diag_field('icebergs', 'h_shelf', axes, Time, &
        'Ice shelf thickness field', 'm')
-    grd%id_frac_shelf_h=register_diag_field('icebergs', 'frac_shelf_h', axes, Time, &
+    grd%id_frac_shelf=register_diag_field('icebergs', 'frac_shelf', axes, Time, &
        'Cell fraction covered by ice shelf', 'none')
     grd%id_frac_cberg_calved=register_diag_field('icebergs', 'frac_cberg_calved', axes, Time, &
        'Cell fraction of fully-calved tabular bonded bergs', 'none')

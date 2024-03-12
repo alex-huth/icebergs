@@ -52,21 +52,27 @@ use ice_bergs_framework, only: footloose
 use ice_bergs_framework, only: orig_dem_moment_of_inertia, no_frac_first_ts
 use ice_bergs_framework, only: A68_test, A68_xdisp, A68_ydisp
 use ice_bergs_framework, only: set_constant_interaction_length_and_width, skip_first_outer_mts_step
-use ice_bergs_framework, only: break_bonds_on_sub_steps
+use ice_bergs_framework, only: break_bonds_on_sub_steps, initialize_iceberg_bonds
 use ice_bergs_framework, only: short_step_mts_grounding, radius_based_drag
+use ice_bergs_framework, only: hexagon_into_quadrants_using_triangles
+use ice_bergs_framework, only: sum_up_spread_fields, sum_up_spread_fields, Area_of_triangle
+use ice_bergs_framework, only: point_in_triangle, point_in_interval, point_is_on_the_line
+use ice_bergs_framework, only: convert_from_grid_to_meters, convert_from_meters_to_grid
+use ice_bergs_framework, only: spread_variable_across_cells
 
 use ice_bergs_io,        only: ice_bergs_io_init, write_restart_bergs, write_trajectory, write_bond_trajectory
 use ice_bergs_io,        only: read_restart_bergs, read_restart_calving
 use ice_bergs_io,        only: read_restart_bonds
 use ice_bergs_io,        only: read_ocean_depth
 
-use ice_shelf_calving,   only: tabular_calving_state, initialize_tabular_calving
-use ice_shelf_calving,   only: process_tabular_calving, ice_shelf_calving_end
+use ice_bergs_framework, only: tabular_calving_state
+use ice_shelf_tabular_calving, only: initialize_tabular_calving
+use ice_shelf_tabular_calving, only: process_tabular_calving, ice_shelf_calving_end
 
 implicit none ; private
 
 public icebergs_init, icebergs_end, icebergs_run, icebergs_stock_pe, icebergs
-public icebergs_incr_mass, icebergs_save_restart, ice_shelf_to_bonded_bergs
+public icebergs_incr_mass, icebergs_save_restart
 
 real, parameter :: pi_180=pi/180.  !< Converts degrees to radians
 real, parameter :: r180_pi=180./pi !< Converts radians to degrees
@@ -359,109 +365,109 @@ subroutine hexagon_test()
 
 end subroutine hexagon_test
 
-!> Initializes bonds
-subroutine initialize_iceberg_bonds(bergs, tabular_calving_only)
-  ! Arguments
-  type(icebergs), pointer :: bergs !< Container for all types and memory
-  logical, intent(in), optional :: tabular_calving_only
-  ! Local variables
-  type(iceberg), pointer :: berg
-  type(iceberg), pointer :: other_berg
-  type(icebergs_gridded), pointer :: grd
-  type(bond) , pointer :: current_bond
-  logical :: already_bonded, tabular_calving
-  real :: T1, L1, W1, lon1, lat1, x1, y1, R1, A1   !Current iceberg
-  real :: T2, L2, W2, lon2, lat2, x2, y2, R2, A2   !Other iceberg
-  real :: dlon,dlat
-  real :: dx_dlon,dy_dlat, lat_ref
-  real :: r_dist_x, r_dist_y, r_dist
-  real :: radius1,radius2,rdenom
-  integer :: grdi_outer, grdj_outer
-  integer :: grdi_inner, grdj_inner
+! !> Initializes bonds
+! subroutine initialize_iceberg_bonds(bergs, tabular_calving_only)
+!   ! Arguments
+!   type(icebergs), pointer :: bergs !< Container for all types and memory
+!   logical, intent(in), optional :: tabular_calving_only
+!   ! Local variables
+!   type(iceberg), pointer :: berg
+!   type(iceberg), pointer :: other_berg
+!   type(icebergs_gridded), pointer :: grd
+!   type(bond) , pointer :: current_bond
+!   logical :: already_bonded, tabular_calving
+!   real :: T1, L1, W1, lon1, lat1, x1, y1, R1, A1   !Current iceberg
+!   real :: T2, L2, W2, lon2, lat2, x2, y2, R2, A2   !Other iceberg
+!   real :: dlon,dlat
+!   real :: dx_dlon,dy_dlat, lat_ref
+!   real :: r_dist_x, r_dist_y, r_dist
+!   real :: radius1,radius2,rdenom
+!   integer :: grdi_outer, grdj_outer
+!   integer :: grdi_inner, grdj_inner
 
-  tabular_calving=.false.
-  if (present(tabular_calving_only)) then
-    if (tabular_calving_only) tabular_calving=.true.     !only bond newly-calved tabular icebergs
-  endif
+!   tabular_calving=.false.
+!   if (present(tabular_calving_only)) then
+!     if (tabular_calving_only) tabular_calving=.true.     !only bond newly-calved tabular icebergs
+!   endif
 
-  if (bergs%manually_initialize_bonds_from_radii) then
-    if (bergs%hexagonal_icebergs) then
-      rdenom=1./(2.*sqrt(3.))
-    else
-      !rdenom=1./pi
-      rdenom=1./4.
-    endif
-  endif
+!   if (bergs%manually_initialize_bonds_from_radii) then
+!     if (bergs%hexagonal_icebergs) then
+!       rdenom=1./(2.*sqrt(3.))
+!     else
+!       !rdenom=1./pi
+!       rdenom=1./4.
+!     endif
+!   endif
 
-  ! For convenience
-  grd=>bergs%grd
-  !Should update halos before doing this
-  ! do grdj_outer = grd%jsc,grd%jec ; do grdi_outer = grd%isc,grd%iec  !Should you be on the data domain??
-  do grdj_outer = grd%jsd,grd%jed ; do grdi_outer = grd%isd,grd%ied  !using data domain -Alex
-    berg=>bergs%list(grdi_outer,grdj_outer)%first
-    do while (associated(berg)) ! loop over all bergs
+!   ! For convenience
+!   grd=>bergs%grd
+!   !Should update halos before doing this
+!   ! do grdj_outer = grd%jsc,grd%jec ; do grdi_outer = grd%isc,grd%iec  !Should you be on the data domain??
+!   do grdj_outer = grd%jsd,grd%jed ; do grdi_outer = grd%isd,grd%ied  !using data domain -Alex
+!     berg=>bergs%list(grdi_outer,grdj_outer)%first
+!     do while (associated(berg)) ! loop over all bergs
 
-      if (tabular_calving .and. berg%static_berg>=0) then
-        berg=>berg%next
-        cycle
-      endif
+!       if (tabular_calving .and. berg%static_berg>=0) then
+!         berg=>berg%next
+!         cycle
+!       endif
 
-      lon1=berg%lon; lat1=berg%lat
-      !call rotpos_to_tang(lon1,lat1,x1,y1)  !Is this correct? Shouldn't it only be on tangent plane?
+!       lon1=berg%lon; lat1=berg%lat
+!       !call rotpos_to_tang(lon1,lat1,x1,y1)  !Is this correct? Shouldn't it only be on tangent plane?
 
-      ! do grdj_inner = grd%jsc,grd%jec ; do grdi_inner = grd%isc,grd%iec  !This line uses n^2 steps
-      do grdj_inner = grd%jsd,grd%jed ; do grdi_inner = grd%isd,grd%ied !Uses n^2 steps. Change to data domain-Alex
-!     do grdj_inner = berg%jne-1,berg%jne+1 ; do grdi_inner = berg%ine-1,berg%ine+1   !Only looping through adjacent cells.
-        other_berg=>bergs%list(grdi_inner,grdj_inner)%first
-        do while (associated(other_berg)) ! loop over all other bergs
+!       ! do grdj_inner = grd%jsc,grd%jec ; do grdi_inner = grd%isc,grd%iec  !This line uses n^2 steps
+!       do grdj_inner = grd%jsd,grd%jed ; do grdi_inner = grd%isd,grd%ied !Uses n^2 steps. Change to data domain-Alex
+! !     do grdj_inner = berg%jne-1,berg%jne+1 ; do grdi_inner = berg%ine-1,berg%ine+1   !Only looping through adjacent cells.
+!         other_berg=>bergs%list(grdi_inner,grdj_inner)%first
+!         do while (associated(other_berg)) ! loop over all other bergs
 
-          if (tabular_calving .and. other_berg%static_berg>=0) then
-            other_berg=>other_berg%next
-            cycle
-          endif
+!           if (tabular_calving .and. other_berg%static_berg>=0) then
+!             other_berg=>other_berg%next
+!             cycle
+!           endif
 
-          if (berg%id .ne. other_berg%id) then
-            !first, make sure the bergs are not bonded already
-            already_bonded=.false.
-            current_bond=>berg%first_bond
-            do while (associated(current_bond))
-              if (current_bond%other_id .ne. other_berg%id) then
-                current_bond=>current_bond%next_bond
-              else
-                current_bond=>null()
-                already_bonded=.true.
-              endif
-            enddo
+!           if (berg%id .ne. other_berg%id) then
+!             !first, make sure the bergs are not bonded already
+!             already_bonded=.false.
+!             current_bond=>berg%first_bond
+!             do while (associated(current_bond))
+!               if (current_bond%other_id .ne. other_berg%id) then
+!                 current_bond=>current_bond%next_bond
+!               else
+!                 current_bond=>null()
+!                 already_bonded=.true.
+!               endif
+!             enddo
 
-            if (.not. already_bonded) then
-              lon2=other_berg%lon; lat2=other_berg%lat
-              dlon=lon1-lon2;      dlat=lat1-lat2
-              lat_ref=0.5*(lat1+lat2)
-              call convert_from_grid_to_meters(lat_ref,grd%grid_is_latlon,dx_dlon,dy_dlat)
-              r_dist_x=dlon*dx_dlon
-              r_dist_y=dlat*dy_dlat
-              r_dist=sqrt( (r_dist_x**2) + (r_dist_y**2) )
+!             if (.not. already_bonded) then
+!               lon2=other_berg%lon; lat2=other_berg%lat
+!               dlon=lon1-lon2;      dlat=lat1-lat2
+!               lat_ref=0.5*(lat1+lat2)
+!               call convert_from_grid_to_meters(lat_ref,grd%grid_is_latlon,dx_dlon,dy_dlat)
+!               r_dist_x=dlon*dx_dlon
+!               r_dist_y=dlat*dy_dlat
+!               r_dist=sqrt( (r_dist_x**2) + (r_dist_y**2) )
 
-              if (bergs%manually_initialize_bonds_from_radii) then
-                radius1=sqrt(berg%length*berg%width*rdenom)
-                radius2=sqrt(other_berg%length*other_berg%width*rdenom)
-                !radius=sqrt(min(berg%length*berg%width,other_berg%length*other_berg%width))
-                if (r_dist.lt.1.25*(radius1+radius2)) &
-                  call form_a_bond(berg, other_berg%id, other_berg%ine, other_berg%jne, other_berg)
-              elseif (r_dist.lt.bergs%length_for_manually_initialize_bonds) then
-                ! If the bergs are closer than bergs%length_for_manually_initialize_bonds, then form a bond -Alex
-                call form_a_bond(berg, other_berg%id, other_berg%ine, other_berg%jne, other_berg)
-              endif
-            endif
-          endif
-          other_berg=>other_berg%next
-        enddo  ! End of looping through all other bergs in the inner list
-      enddo ; enddo;  !End of inner loop
-      berg=>berg%next
-    enddo ! End of looping through all bergs in the outer list
-  enddo ; enddo; !End of outer loop.
+!               if (bergs%manually_initialize_bonds_from_radii) then
+!                 radius1=sqrt(berg%length*berg%width*rdenom)
+!                 radius2=sqrt(other_berg%length*other_berg%width*rdenom)
+!                 !radius=sqrt(min(berg%length*berg%width,other_berg%length*other_berg%width))
+!                 if (r_dist.lt.1.25*(radius1+radius2)) &
+!                   call form_a_bond(berg, other_berg%id, other_berg%ine, other_berg%jne, other_berg)
+!               elseif (r_dist.lt.bergs%length_for_manually_initialize_bonds) then
+!                 ! If the bergs are closer than bergs%length_for_manually_initialize_bonds, then form a bond -Alex
+!                 call form_a_bond(berg, other_berg%id, other_berg%ine, other_berg%jne, other_berg)
+!               endif
+!             endif
+!           endif
+!           other_berg=>other_berg%next
+!         enddo  ! End of looping through all other bergs in the inner list
+!       enddo ; enddo;  !End of inner loop
+!       berg=>berg%next
+!     enddo ! End of looping through all bergs in the outer list
+!   enddo ; enddo; !End of outer loop.
 
-end subroutine initialize_iceberg_bonds
+! end subroutine initialize_iceberg_bonds
 
 ! !> Returns a list of partially-full bergs connected to full bergs, and the id of the berg at the end of this list
 ! recursive subroutine make_list_of_bonded_to_full(bergs,berg,first)
@@ -528,7 +534,7 @@ end subroutine initialize_iceberg_bonds
 !     !Delete the berg that was just processed from the list
 !     call delete_tabular_particle_from_list(first, prev_berg)
 !   enddo
-end subroutine assign_bonds_from_full
+! end subroutine assign_bonds_from_full
 
 
 
@@ -610,41 +616,41 @@ end subroutine assign_bonds_from_full
 ! end subroutine redistribute_iKID_edge_mass
 
 
-!> Returns metric converting grid distances to meters
-subroutine convert_from_grid_to_meters(lat_ref, grid_is_latlon, dx_dlon, dy_dlat)
-  ! Arguments
-  real, intent(in) :: lat_ref !< Latitude at which to make metric conversion (degree N)
-  logical, intent(in) :: grid_is_latlon !< True if grid model grid is in lat-lon coordinates
-  real, intent(out) :: dx_dlon !< Metric dx/dlon
-  real, intent(out) :: dy_dlat !< Metric dy/dlat
+! !> Returns metric converting grid distances to meters
+! subroutine convert_from_grid_to_meters(lat_ref, grid_is_latlon, dx_dlon, dy_dlat)
+!   ! Arguments
+!   real, intent(in) :: lat_ref !< Latitude at which to make metric conversion (degree N)
+!   logical, intent(in) :: grid_is_latlon !< True if grid model grid is in lat-lon coordinates
+!   real, intent(out) :: dx_dlon !< Metric dx/dlon
+!   real, intent(out) :: dy_dlat !< Metric dy/dlat
 
-  if (grid_is_latlon) then
-    dx_dlon=(pi/180.)*Rearth*cos((lat_ref)*(pi/180.))
-    dy_dlat=(pi/180.)*Rearth
-  else
-    dx_dlon=1.
-    dy_dlat=1.
-  endif
+!   if (grid_is_latlon) then
+!     dx_dlon=(pi/180.)*Rearth*cos((lat_ref)*(pi/180.))
+!     dy_dlat=(pi/180.)*Rearth
+!   else
+!     dx_dlon=1.
+!     dy_dlat=1.
+!   endif
 
-end subroutine convert_from_grid_to_meters
+! end subroutine convert_from_grid_to_meters
 
-!> Returns metric converting distance in meters to grid distance
-subroutine  convert_from_meters_to_grid(lat_ref,grid_is_latlon ,dlon_dx,dlat_dy)
-  ! Arguments
-  real, intent(in) :: lat_ref !< Latitude at which to make metric conversion (degree N)
-  logical, intent(in) :: grid_is_latlon !< True if grid model grid is in lat-lon coordinates
-  real, intent(out) :: dlon_dx !< Metric dlon/dx
-  real, intent(out) :: dlat_dy !< Metric dlat/dy
+! !> Returns metric converting distance in meters to grid distance
+! subroutine  convert_from_meters_to_grid(lat_ref,grid_is_latlon ,dlon_dx,dlat_dy)
+!   ! Arguments
+!   real, intent(in) :: lat_ref !< Latitude at which to make metric conversion (degree N)
+!   logical, intent(in) :: grid_is_latlon !< True if grid model grid is in lat-lon coordinates
+!   real, intent(out) :: dlon_dx !< Metric dlon/dx
+!   real, intent(out) :: dlat_dy !< Metric dlat/dy
 
-  if (grid_is_latlon) then
-    dlon_dx=(180./pi)/(Rearth*cos((lat_ref)*(pi/180.)))
-    dlat_dy=(180./pi)/Rearth
-  else
-    dlon_dx=1.
-    dlat_dy=1.
-  endif
+!   if (grid_is_latlon) then
+!     dlon_dx=(180./pi)/(Rearth*cos((lat_ref)*(pi/180.)))
+!     dlat_dy=(180./pi)/Rearth
+!   else
+!     dlon_dx=1.
+!     dlat_dy=1.
+!   endif
 
-end subroutine convert_from_meters_to_grid
+! end subroutine convert_from_meters_to_grid
 
 !> Calculates interactions between a berg and all bergs in range
 subroutine interactive_force(bergs, berg, IA_x, IA_y, u0, v0, u1, v1,&
@@ -4276,50 +4282,50 @@ subroutine spread_mass_across_ocean_cells(bergs, berg, i, j, x, y, Mberg, Mbits,
 
 end subroutine spread_mass_across_ocean_cells
 
-!> Distribute a quantity among nine cells on a grid centered at cell i,j
-subroutine spread_variable_across_cells(grd, variable_on_ocean, Var, i, j, &
-           yDxL, yDxC,yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR, I_fraction_used)
-  ! Arguments
-  type(icebergs_gridded), pointer, intent(in) :: grd !< Container for gridded fields
-  real, dimension(grd%isd:grd%ied, grd%jsd:grd%jed, 9), intent(inout) :: variable_on_ocean !< Gridded field to augment
-  real, intent(in) :: Var !< Variable to be spread accross cell
-  real, intent(in) :: yDxL !< Weight for the cell at i-1,j-1
-  real, intent(in) :: yDxC !< Weight for the cell at i-1,j
-  real, intent(in) :: yDxR !< Weight for the cell at i-1,j+1
-  real, intent(in) :: yCxL !< Weight for the cell at i,j-1
-  real, intent(in) :: yCxC !< Weight for the cell at i,j
-  real, intent(in) :: yCxR !< Weight for the cell at i,j-1
-  real, intent(in) :: yUxL !< Weight for the cell at i+1,j-1
-  real, intent(in) :: yUxC !< Weight for the cell at i+1,j
-  real, intent(in) :: yUxR !< Weight for the cell at i+1,j+1
-  real, intent(in) :: I_fraction_used !< Amount of iceberg used (inverse)
-  integer, intent(in) :: i !< i-index of cell containing center of berg
-  integer, intent(in) :: j !< j-index of cell containing center of berg
+!!$!> Distribute a quantity among nine cells on a grid centered at cell i,j
+!!$subroutine spread_variable_across_cells(grd, variable_on_ocean, Var, i, j, &
+!!$           yDxL, yDxC,yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR, I_fraction_used)
+!!$  ! Arguments
+!!$  type(icebergs_gridded), pointer, intent(in) :: grd !< Container for gridded fields
+!!$  real, dimension(grd%isd:grd%ied, grd%jsd:grd%jed, 9), intent(inout) :: variable_on_ocean !< Gridded field to augment
+!!$  real, intent(in) :: Var !< Variable to be spread accross cell
+!!$  real, intent(in) :: yDxL !< Weight for the cell at i-1,j-1
+!!$  real, intent(in) :: yDxC !< Weight for the cell at i-1,j
+!!$  real, intent(in) :: yDxR !< Weight for the cell at i-1,j+1
+!!$  real, intent(in) :: yCxL !< Weight for the cell at i,j-1
+!!$  real, intent(in) :: yCxC !< Weight for the cell at i,j
+!!$  real, intent(in) :: yCxR !< Weight for the cell at i,j-1
+!!$  real, intent(in) :: yUxL !< Weight for the cell at i+1,j-1
+!!$  real, intent(in) :: yUxC !< Weight for the cell at i+1,j
+!!$  real, intent(in) :: yUxR !< Weight for the cell at i+1,j+1
+!!$  real, intent(in) :: I_fraction_used !< Amount of iceberg used (inverse)
+!!$  integer, intent(in) :: i !< i-index of cell containing center of berg
+!!$  integer, intent(in) :: j !< j-index of cell containing center of berg
+!!$
+!!$  !Spreading the iceberg mass onto the ocean
+!!$  variable_on_ocean(i,j,1)=variable_on_ocean(i,j,1)+(yDxL*Var*I_fraction_used)
+!!$  variable_on_ocean(i,j,2)=variable_on_ocean(i,j,2)+(yDxC*Var*I_fraction_used)
+!!$  variable_on_ocean(i,j,3)=variable_on_ocean(i,j,3)+(yDxR*Var*I_fraction_used)
+!!$  variable_on_ocean(i,j,4)=variable_on_ocean(i,j,4)+(yCxL*Var*I_fraction_used)
+!!$  variable_on_ocean(i,j,5)=variable_on_ocean(i,j,5)+(yCxC*Var*I_fraction_used)
+!!$  variable_on_ocean(i,j,6)=variable_on_ocean(i,j,6)+(yCxR*Var*I_fraction_used)
+!!$  variable_on_ocean(i,j,7)=variable_on_ocean(i,j,7)+(yUxL*Var*I_fraction_used)
+!!$  variable_on_ocean(i,j,8)=variable_on_ocean(i,j,8)+(yUxC*Var*I_fraction_used)
+!!$  variable_on_ocean(i,j,9)=variable_on_ocean(i,j,9)+(yUxR*Var*I_fraction_used)
+!!$
+!!$end subroutine spread_variable_across_cells
 
-  !Spreading the iceberg mass onto the ocean
-  variable_on_ocean(i,j,1)=variable_on_ocean(i,j,1)+(yDxL*Var*I_fraction_used)
-  variable_on_ocean(i,j,2)=variable_on_ocean(i,j,2)+(yDxC*Var*I_fraction_used)
-  variable_on_ocean(i,j,3)=variable_on_ocean(i,j,3)+(yDxR*Var*I_fraction_used)
-  variable_on_ocean(i,j,4)=variable_on_ocean(i,j,4)+(yCxL*Var*I_fraction_used)
-  variable_on_ocean(i,j,5)=variable_on_ocean(i,j,5)+(yCxC*Var*I_fraction_used)
-  variable_on_ocean(i,j,6)=variable_on_ocean(i,j,6)+(yCxR*Var*I_fraction_used)
-  variable_on_ocean(i,j,7)=variable_on_ocean(i,j,7)+(yUxL*Var*I_fraction_used)
-  variable_on_ocean(i,j,8)=variable_on_ocean(i,j,8)+(yUxC*Var*I_fraction_used)
-  variable_on_ocean(i,j,9)=variable_on_ocean(i,j,9)+(yUxR*Var*I_fraction_used)
-
-end subroutine spread_variable_across_cells
-
-!> Returns area of a triangle
-real function Area_of_triangle(Ax, Ay, Bx, By, Cx, Cy)
-  ! Arguments
-  real, intent(in) :: Ax !< x-position of corner A
-  real, intent(in) :: Ay !< y-position of corner A
-  real, intent(in) :: Bx !< x-position of corner B
-  real, intent(in) :: By !< y-position of corner B
-  real, intent(in) :: Cx !< x-position of corner C
-  real, intent(in) :: Cy !< y-position of corner C
-  Area_of_triangle    =   abs(    0.5*((Ax*(By-Cy))+(Bx*(Cy-Ay))+(Cx*(Ay-By))) )
-end function Area_of_triangle
+!!$!> Returns area of a triangle
+!!$real function Area_of_triangle(Ax, Ay, Bx, By, Cx, Cy)
+!!$  ! Arguments
+!!$  real, intent(in) :: Ax !< x-position of corner A
+!!$  real, intent(in) :: Ay !< y-position of corner A
+!!$  real, intent(in) :: Bx !< x-position of corner B
+!!$  real, intent(in) :: By !< y-position of corner B
+!!$  real, intent(in) :: Cx !< x-position of corner C
+!!$  real, intent(in) :: Cy !< y-position of corner C
+!!$  Area_of_triangle    =   abs(    0.5*((Ax*(By-Cy))+(Bx*(Cy-Ay))+(Cx*(Ay-By))) )
+!!$end function Area_of_triangle
 
 !> Returns x rounded of to sig_fig
 !! \todo What the heck is this for? -AJA
@@ -4331,520 +4337,520 @@ real function roundoff(x,sig_fig)
   roundoff=(FLOAT(INT(x * (10.**sig_fig) + 0.5)) / (10.**sig_fig))
 end function roundoff
 
-!> Returns true of a point is in or on the rectangle with opposite corners A and B
-logical function point_in_interval(Ax, Ay, Bx, By, px, py)
-  ! Arguments
-  real, intent(in) :: Ax !< x-position of corner A
-  real, intent(in) :: Ay !< y-position of corner A
-  real, intent(in) :: Bx !< x-position of corner B
-  real, intent(in) :: By !< y-position of corner B
-  real, intent(in) :: px !< x-position of point
-  real, intent(in) :: py !< y-position of point
-  point_in_interval=.False.
-  if ((px <= max(Ax,Bx)) .and. (px >= min(Ax,Bx))) then
-    if ((py <= max(Ay,By)) .and. (py >= min(Ay,By))) then
-      point_in_interval=.True.
-    endif
-  endif
-end function point_in_interval
+!!$!> Returns true of a point is in or on the rectangle with opposite corners A and B
+!!$logical function point_in_interval(Ax, Ay, Bx, By, px, py)
+!!$  ! Arguments
+!!$  real, intent(in) :: Ax !< x-position of corner A
+!!$  real, intent(in) :: Ay !< y-position of corner A
+!!$  real, intent(in) :: Bx !< x-position of corner B
+!!$  real, intent(in) :: By !< y-position of corner B
+!!$  real, intent(in) :: px !< x-position of point
+!!$  real, intent(in) :: py !< y-position of point
+!!$  point_in_interval=.False.
+!!$  if ((px <= max(Ax,Bx)) .and. (px >= min(Ax,Bx))) then
+!!$    if ((py <= max(Ay,By)) .and. (py >= min(Ay,By))) then
+!!$      point_in_interval=.True.
+!!$    endif
+!!$  endif
+!!$end function point_in_interval
+!!$
+!!$!> Returns true if point q is on a line through points A and B
+!!$logical function point_is_on_the_line(Ax, Ay, Bx, By, qx, qy)
+!!$  ! Arguments
+!!$  real, intent(in) :: Ax !< x-position of point A
+!!$  real, intent(in) :: Ay !< y-position of point A
+!!$  real, intent(in) :: Bx !< x-position of point B
+!!$  real, intent(in) :: By !< y-position of point B
+!!$  real, intent(in) :: qx !< x-position of point q
+!!$  real, intent(in) :: qy !< y-position of point q
+!!$  ! Local variables
+!!$  real :: tol, dxc,dyc,dxl,dyl,cross
+!!$  !tol=1.e-12
+!!$  tol=0.0
+!!$  dxc = qx - Ax
+!!$  dyc = qy - Ay
+!!$  dxl = Bx - Ax
+!!$  dyl = By - Ay
+!!$  cross = dxc * dyl - dyc * dxl
+!!$  if (abs(cross)<=tol) then
+!!$    point_is_on_the_line=.True.
+!!$  else
+!!$   point_is_on_the_line=.False.
+!!$  endif
+!!$end function point_is_on_the_line
 
-!> Returns true if point q is on a line through points A and B
-logical function point_is_on_the_line(Ax, Ay, Bx, By, qx, qy)
-  ! Arguments
-  real, intent(in) :: Ax !< x-position of point A
-  real, intent(in) :: Ay !< y-position of point A
-  real, intent(in) :: Bx !< x-position of point B
-  real, intent(in) :: By !< y-position of point B
-  real, intent(in) :: qx !< x-position of point q
-  real, intent(in) :: qy !< y-position of point q
-  ! Local variables
-  real :: tol, dxc,dyc,dxl,dyl,cross
-  !tol=1.e-12
-  tol=0.0
-  dxc = qx - Ax
-  dyc = qy - Ay
-  dxl = Bx - Ax
-  dyl = By - Ay
-  cross = dxc * dyl - dyc * dxl
-  if (abs(cross)<=tol) then
-    point_is_on_the_line=.True.
-  else
-   point_is_on_the_line=.False.
-  endif
-end function point_is_on_the_line
+!!$!> Returns True if a point q is inside a triangle ABC
+!!$!!
+!!$!! This function decides whether a point (qx,qy) is inside the triangle ABC.
+!!$!! There is also the option to include the boundary of the triangle.
+!!$logical function point_in_triangle(Ax, Ay, Bx, By, Cx, Cy, qx, qy)
+!!$  ! Arguments
+!!$  real, intent(in) :: Ax !< x-position of corner A
+!!$  real, intent(in) :: Ay !< y-position of corner A
+!!$  real, intent(in) :: Bx !< x-position of corner B
+!!$  real, intent(in) :: By !< y-position of corner B
+!!$  real, intent(in) :: Cx !< x-position of corner C
+!!$  real, intent(in) :: Cy !< y-position of corner C
+!!$  real, intent(in) :: qx !< x-position of point q
+!!$  real, intent(in) :: qy !< y-position of point q
+!!$  ! Local variables
+!!$  real :: l0,l1,l2,p0,p1,p2
+!!$  real :: v0x,v1x,v2x,v0y,v1y,v2y,dot00,dot01,dot02,dot11,dot12
+!!$
+!!$  point_in_triangle = .False.
+!!$  if ((Ax==qx .and. Ay==qy) .or. (Bx==qx .and. By==qy) .or. (Cx==qx .and. Cy==qy)) then ! Exclude the pathelogical case
+!!$      point_in_triangle = .False.
+!!$  else
+!!$    if (((point_is_on_the_line(Ax,Ay,Bx,By,qx,qy) .or. (point_is_on_the_line(Ax,Ay,Cx,Cy,qx,qy))) .or. (point_is_on_the_line(Bx,By,Cx,Cy,qx,qy)))) then
+!!$      point_in_triangle = .False.
+!!$    else
+!!$      ! Compute point in triangle using Barycentric coordinates (the same as sum_sign_dot_prod routines)
+!!$      l0=(qx-Ax)*(By-Ay)-(qy-Ay)*(Bx-Ax)
+!!$      l1=(qx-Bx)*(Cy-By)-(qy-By)*(Cx-Bx)
+!!$      l2=(qx-Cx)*(Ay-Cy)-(qy-Cy)*(Ax-Cx)
+!!$
+!!$      p0=sign(1., l0); if (l0==0.)  p0=0.
+!!$      p1=sign(1., l1); if (l1==0.)  p1=0.
+!!$      p2=sign(1., l2); if (l2==0.)  p2=0.
+!!$
+!!$      if ( (abs(p0)+abs(p2))+(abs(p1)) == abs((p0+p2)+(p1)) )  point_in_triangle = .True.
+!!$    endif
+!!$  endif
+!!$end function point_in_triangle
 
-!> Returns True if a point q is inside a triangle ABC
-!!
-!! This function decides whether a point (qx,qy) is inside the triangle ABC.
-!! There is also the option to include the boundary of the triangle.
-logical function point_in_triangle(Ax, Ay, Bx, By, Cx, Cy, qx, qy)
-  ! Arguments
-  real, intent(in) :: Ax !< x-position of corner A
-  real, intent(in) :: Ay !< y-position of corner A
-  real, intent(in) :: Bx !< x-position of corner B
-  real, intent(in) :: By !< y-position of corner B
-  real, intent(in) :: Cx !< x-position of corner C
-  real, intent(in) :: Cy !< y-position of corner C
-  real, intent(in) :: qx !< x-position of point q
-  real, intent(in) :: qy !< y-position of point q
-  ! Local variables
-  real :: l0,l1,l2,p0,p1,p2
-  real :: v0x,v1x,v2x,v0y,v1y,v2y,dot00,dot01,dot02,dot11,dot12
-
-  point_in_triangle = .False.
-  if ((Ax==qx .and. Ay==qy) .or. (Bx==qx .and. By==qy) .or. (Cx==qx .and. Cy==qy)) then ! Exclude the pathelogical case
-      point_in_triangle = .False.
-  else
-    if (((point_is_on_the_line(Ax,Ay,Bx,By,qx,qy) .or. (point_is_on_the_line(Ax,Ay,Cx,Cy,qx,qy))) .or. (point_is_on_the_line(Bx,By,Cx,Cy,qx,qy)))) then
-      point_in_triangle = .False.
-    else
-      ! Compute point in triangle using Barycentric coordinates (the same as sum_sign_dot_prod routines)
-      l0=(qx-Ax)*(By-Ay)-(qy-Ay)*(Bx-Ax)
-      l1=(qx-Bx)*(Cy-By)-(qy-By)*(Cx-Bx)
-      l2=(qx-Cx)*(Ay-Cy)-(qy-Cy)*(Ax-Cx)
-
-      p0=sign(1., l0); if (l0==0.)  p0=0.
-      p1=sign(1., l1); if (l1==0.)  p1=0.
-      p2=sign(1., l2); if (l2==0.)  p2=0.
-
-      if ( (abs(p0)+abs(p2))+(abs(p1)) == abs((p0+p2)+(p1)) )  point_in_triangle = .True.
-    endif
-  endif
-end function point_in_triangle
-
-!> Calculates the two areas of a triangle divided by an axis line
-!!
-!! This function calculates the area of a triangle on opposite sides of an axis when the
-!! triangle is split with two points on one side, and one point on the other.
-!! In this function, A is the point on one side of the axis, and B,C are on the opposite sides.
-!! \todo You should change this name a little, so that it not similar the other routine.
-subroutine Area_of_triangle_across_axes(Ax, Ay, Bx, By, Cx, Cy, axis1, Area_positive, Area_negative)
-  ! Arguments
-  real, intent(in) :: Ax !< x-position of corner A
-  real, intent(in) :: Ay !< y-position of corner A
-  real, intent(in) :: Bx !< x-position of corner B
-  real, intent(in) :: By !< y-position of corner B
-  real, intent(in) :: Cx !< x-position of corner C
-  real, intent(in) :: Cy !< y-position of corner C
-  character, intent(in) :: axis1 !< Either 'x' or 'y'
-  real, intent(out) :: Area_positive !< Area on negative side of axis line
-  real, intent(out) :: Area_negative !< Area on positive side of axis line
-  ! Local variables
-  real :: pABx, pABy, pACx, pACy, A0
-  real :: A_half_triangle, A_triangle
-
-  A_triangle=Area_of_triangle(Ax,Ay,Bx,By,Cx,Cy)
-
-  call intercept_of_a_line(Ax,Ay,Bx,By,axis1,pABx, pABy)
-  call intercept_of_a_line(Ax,Ay,Cx,Cy,axis1,pACx, pACy)
-
-  if (axis1=='x')  A0=Ay; !Value used for if statements (deciding up/down vs left/right)
-  if (axis1=='y')  A0=Ax; !Value used for if statements (deciding up/down vs left/right)
-
-  A_half_triangle=Area_of_triangle(Ax,Ay,pABx,pABy,pACx,pACy)
-  if (A0>=0.) then
-    Area_positive= A_half_triangle
-    Area_negative= A_triangle-A_half_triangle
-  else
-    Area_positive= A_triangle-A_half_triangle
-    Area_negative= A_half_triangle
-  endif
-
-end subroutine Area_of_triangle_across_axes
-
-!> Returns the axis intercept of a line AB
-!!
-!! This routine returns the position (x0,y0) at which a line AB intercepts the x or y axis.
-!! The value No_intercept_val is returned when the line does not intercept the axis.
-subroutine intercept_of_a_line(Ax, Ay, Bx, By, axes1, x0, y0)
-  ! Arguments
-  real, intent(in) :: Ax !< x-position of corner A
-  real, intent(in) :: Ay !< y-position of corner A
-  real, intent(in) :: Bx !< x-position of corner B
-  real, intent(in) :: By !< y-position of corner B
-  character, intent(in) :: axes1 !< Either 'x' or 'y'
-  real, intent(out) :: x0 !< x-position of intercept
-  real, intent(out) :: y0 !< y-position of intercept
-  ! Local variables
-  real :: No_intercept_val ! Huge value used to make sure that the intercept is outside the triangle in the parallel case.
-
-  No_intercept_val=100000000000. ! Huge value used to make sure that the intercept is outside the triangle in the parallel case.
-  x0=No_intercept_val
-  y0=No_intercept_val
-
-  if (axes1=='x') then ! x intercept
-    if (Ay.ne.By) then
-      x0=Ax -(((Ax-Bx)/(Ay-By))*Ay)
-      y0=0.
-    endif
-  endif
-
-  if (axes1=='y') then ! y intercept
-    if (Ax.ne.Bx) then
-      x0=0.
-      y0=-(((Ay-By)/(Ax-Bx))*Ax)+Ay
-    endif
-  endif
-end subroutine intercept_of_a_line
-
-!> Calculates the area of a triangle on either side of an axis, if any.
-!!
-!! This routine gives you the area of a triangle on opposite sides of the axis specified.
-!! It also takes care of the special case where the triangle is totally on one side.
-!! This routine calls Area_of_triangle_across_axes to calculate the areas when the triangles are split.
-subroutine divding_triangle_across_axes(Ax, Ay, Bx, By, Cx, Cy, axes1, Area_positive, Area_negative)
-  ! Arguments
-  real, intent(in) :: Ax !< x-position of corner A
-  real, intent(in) :: Ay !< y-position of corner A
-  real, intent(in) :: Bx !< x-position of corner B
-  real, intent(in) :: By !< y-position of corner B
-  real, intent(in) :: Cx !< x-position of corner C
-  real, intent(in) :: Cy !< y-position of corner C
-  character, intent(in) :: axes1 !< Either 'x' or 'y'
-  real, intent(out) :: Area_positive !< Area on negative side of axis line
-  real, intent(out) :: Area_negative !< Area on positive side of axis line
-  ! Local variables
-  real :: A0,B0,C0
-  real A_triangle
-
-  if (axes1=='x') then ! Use the y-coordinates for if statements to see which side of the line you are on
-    A0=Ay
-    B0=By
-    C0=Cy
-  endif
-  if (axes1=='y') then ! Use the y-coordinates for if statements to see which side of the line you are on
-    A0=Ax
-    B0=Bx
-    C0=Cx
-  endif
-
-  A_triangle=Area_of_triangle(Ax,Ay,Bx,By,Cx,Cy)
-  if ((B0*C0)>0.) then ! B and C are on the same side  (and non-zero)
-    if ((A0*B0).ge.0.) then ! all three on the same side (if it equals zero, then A0=0 and the others are not)
-      if ((A0>0.)  .or.  ((A0==0.) .and.  (B0>0.))) then
-        Area_positive= A_triangle
-        Area_negative= 0.
-      else
-        Area_positive= 0.
-        Area_negative= A_triangle
-      endif
-    else  !A is on the opposite side to B and C
-      call Area_of_triangle_across_axes(Ax,Ay,Bx,By,Cx,Cy,axes1,Area_positive, Area_negative)
-    endif
-
-  elseif ((B0*C0)<0.) then !B and C are on the opposite sides
-    if ((A0*B0).ge. 0.) then !C is all alone
-      call Area_of_triangle_across_axes(Cx,Cy,Bx,By,Ax,Ay,axes1,Area_positive, Area_negative)
-    else !B is all alone
-      call Area_of_triangle_across_axes(Bx,By,Cx,Cy,Ax,Ay,axes1,Area_positive, Area_negative)
-    endif
-
-  else  !This is the case when either B or C is equal to zero (or both), A0 could be zero too.
-    if (((A0.eq.0.) .and. (B0.eq.0.)) .and. (C0.eq.0.)) then
-      Area_positive= 0.
-      Area_negative= 0.
-    elseif ((A0*B0<0.)  .or.  (A0*C0<0.)) then    !A, B are on opposite sides, and C is zero.  OR  A, C are on opposite sides, and B is zero.
-      call Area_of_triangle_across_axes(Ax,Ay,Bx,By,Cx,Cy,axes1,Area_positive, Area_negative)
-    elseif (((A0*B0>0.) .or. (A0*C0>0.)) .or. (((abs(A0)>0.) .and. (B0==0.)) .and. (C0==0.))) then
-      if (A0>0.) then
-        Area_positive= A_triangle
-        Area_negative= 0.
-      else
-        Area_positive= 0.
-        Area_negative= A_triangle
-      endif
-
-    elseif (A0.eq. 0.) then   !(one of B,C is zero too)
-      if ((B0>0.) .or. (C0>0.)) then
-        Area_positive= A_triangle
-        Area_negative= 0.
-      elseif ((B0<0.) .or. (C0<0.)) then
-        Area_positive= 0.
-        Area_negative= A_triangle
-      else
-        call error_mesg('KID, iceberg_run', 'Logical error inside triangle dividing routine', FATAL)
-      endif
-    else
-      call error_mesg('KID, iceberg_run', 'Another logical error inside triangle dividing routine', FATAL)
-    endif
-  endif
-end subroutine divding_triangle_across_axes
-
-!> Areas of a triangle divided into quadrants
-!!
-!! This routine takes a triangle, and finds the intersection with the four quadrants.
-subroutine Triangle_divided_into_four_quadrants(Ax, Ay, Bx, By, Cx, Cy, Area_triangle, Area_Q1, Area_Q2 ,Area_Q3 ,Area_Q4)
-  ! Arguments
-  real, intent(in) :: Ax !< x-position of corner A
-  real, intent(in) :: Ay !< y-position of corner A
-  real, intent(in) :: Bx !< x-position of corner B
-  real, intent(in) :: By !< y-position of corner B
-  real, intent(in) :: Cx !< x-position of corner C
-  real, intent(in) :: Cy !< y-position of corner C
-  real, intent(out) :: Area_triangle !< Are of triangle
-  real, intent(out) :: Area_Q1 !< Are in quadrant 1
-  real, intent(out) :: Area_Q2 !< Are in quadrant 2
-  real, intent(out) :: Area_Q3 !< Are in quadrant 2
-  real, intent(out) :: Area_Q4 !< Are in quadrant 4
-  ! Local variables
-  real :: Area_Upper, Area_Lower, Area_Right, Area_Left
-  real :: px, py , qx , qy
-  real :: Area_key_quadrant,Error
-  real :: tol
-  integer :: Key_quadrant
-  integer ::sig_fig
-  integer :: stderrunit
-
-  ! Get the stderr unit number
-  stderrunit = stderr()
-  tol=1.e-10
-
-  Area_triangle=Area_of_triangle(Ax,Ay,Bx,By,Cx,Cy)
-
-  ! Calculating area across axes
-  call divding_triangle_across_axes(Ax,Ay,Bx,By,Cx,Cy,'x',Area_Upper ,Area_Lower)
-  call divding_triangle_across_axes(Ax,Ay,Bx,By,Cx,Cy,'y',Area_Right ,Area_Left)
-
-  ! Decide if the origin is in the triangle. If so, then you have to divide the area 4 ways
-  ! This is done by finding a quadrant where the intersection between the triangle and quadrant forms a new triangle
-  ! (This occurs when on of the sides of the triangle  intersects both the x and y axis)
-  if (point_in_triangle(Ax,Ay,Bx,By,Cx,Cy,0.,0.)) then
-    ! Find a line in the triangle that cuts both axes in/on the triangle
-    call intercept_of_a_line(Ax,Ay,Bx,By,'x',px,py); !x_intercept
-    call intercept_of_a_line(Ax,Ay,Bx,By,'y',qx,qy); !y_intercept
-    ! Note that the 1. here means that we include points on the boundary of the triangle.
-    if (.not.((point_in_interval(Ax,Ay,Bx,By,px,py)) .and. (point_in_interval(Ax,Ay,Bx,By,qx,qy)))) then
-      call intercept_of_a_line(Ax,Ay,Cx,Cy,'x',px,py); !x_intercept
-      call intercept_of_a_line(Ax,Ay,Cx,Cy,'y',qx,qy); !y_intercept
-      if (.not.((point_in_interval(Ax,Ay,Cx,Cy,px,py)) .and. (point_in_interval(Ax,Ay,Cx,Cy,qx,qy)))) then
-        call intercept_of_a_line(Bx,By,Cx,Cy,'x',px,py); !x_intercept
-        call intercept_of_a_line(Bx,By,Cx,Cy,'y',qx,qy); !y_intercept
-        if (.not.((point_in_interval(Bx,By,Cx,Cy,px,py)) .and. (point_in_interval(Bx,By,Cx,Cy,qx,qy)))) then
-          ! You should not get here, but there might be some bugs in the code to do with points exactly falling on axes.
-          !if (mpp_pe().eq.12) then
-            write(stderrunit,*) 'KID,corners', Ax,Ay,Bx,By,Cx,Cy
-          !endif
-          call error_mesg('KID, iceberg_run', 'Something went wrong with Triangle_divide_into_four_quadrants', FATAL)
-        endif
-      endif
-    endif
-
-    ! Assigning quadrants. Key_quadrant is the quadrant with the baby triangle in it.
-    Area_key_quadrant=Area_of_triangle(px,py,qx,qy,0.,0.)
-    if ((px.ge. 0.) .and. (qy.ge. 0.)) then  !First quadrant
-      Key_quadrant=1
-    elseif ((px.lt.0.) .and. (qy.ge. 0.)) then  !Second quadrant
-      Key_quadrant=2
-    elseif ((px.lt. 0.) .and. (qy.lt. 0.)) then !Third quadrant
-      Key_quadrant=3
-    elseif ((px.ge. 0.) .and. (qy.lt. 0.)) then !Forth quadrant
-      Key_quadrant=4
-    else  !
-      call error_mesg('KID, iceberg_run', 'None of the quadrants are Key', WARNING)
-      write(stderrunit,*) 'KID, Triangle, px,qy', px,qy
-    endif
-
-  else ! At least one quadrant is empty, and this can be used to find the areas in the other quadrant.  Assigning quadrants. Key_quadrant is the empty quadrant.
-    Area_key_quadrant=0
-    if      ( (.not. ((((Ax>0.) .and. (Ay>0.)) .or. ((Bx>0.) .and. (By> 0.))) .or. ((Cx>0.) .and. (Cy> 0.)))) .and. ((Area_Upper+Area_Right).le.Area_triangle) ) then
-      ! No points land in this quadrant and triangle does not cross the quadrant
-      Key_quadrant=1
-    elseif  ( (.not. ((((Ax<0.) .and. (Ay>0)) .or. ((Bx<0.) .and. (By>0.))) .or. ((Cx<0.) .and. (Cy>0.)))) .and. ((Area_Upper+Area_Left).le. Area_triangle) ) then
-      Key_quadrant=2
-    elseif  ( (.not. ((((Ax<0.) .and. (Ay<0.)) .or. ((Bx<0.) .and. (By< 0.))) .or. ((Cx<0.) .and. (Cy< 0.)))) .and. ((Area_Lower+Area_Left) .le.Area_triangle) ) then
-      Key_quadrant=3
-    else
-      Key_quadrant=4
-    endif
-  endif
-
-  ! Assign values to quadrants
-  if (Key_quadrant .eq. 1) then
-    Area_Q1=Area_key_quadrant
-    Area_Q2=Area_Upper-Area_Q1
-    Area_Q4=Area_Right-Area_Q1
-    !Area_Q3=Area_Left-Area_Q2 ! These lines have been changes so that the sum of the 4 quadrants exactly matches the triangle area.
-    Area_Q3=Area_triangle-(Area_Q1+Area_Q2+Area_Q4)
-  elseif (Key_quadrant .eq. 2) then
-    Area_Q2=Area_key_quadrant
-    Area_Q1=Area_Upper-Area_Q2
-    Area_Q4=Area_Right-Area_Q1
-    !Area_Q3=Area_Left-Area_Q2
-    Area_Q3=Area_triangle-(Area_Q1+Area_Q2+Area_Q4)
-  elseif (Key_quadrant==3) then
-    Area_Q3=Area_key_quadrant
-    Area_Q2=Area_Left-Area_Q3
-    Area_Q1=Area_Upper-Area_Q2
-    !Area_Q4=Area_Right-Area_Q1
-    Area_Q4=Area_triangle-(Area_Q1+Area_Q2+Area_Q3)
-  elseif (Key_quadrant==4) then
-    Area_Q4=Area_key_quadrant
-    Area_Q1=Area_Right-Area_Q4
-    Area_Q2=Area_Upper-Area_Q1
-    !Area_Q3=Area_Left-Area_Q2
-    Area_Q3=Area_triangle-(Area_Q1+Area_Q2+Area_Q4)
-  else
-    call error_mesg('KID, iceberg_run', 'Logical error inside triangle into four quadrants. Should not get here.', FATAL)
-  endif
-
-  Area_Q1=max(Area_Q1,0.)
-  Area_Q2=max(Area_Q2,0.)
-  Area_Q3=max(Area_Q3,0.)
-  Area_Q4=max(Area_Q4,0.)
-
-
-  Error=abs(Area_Q1+Area_Q2+Area_Q3+Area_Q4-Area_triangle)
-  if (Error>tol) then
-    call error_mesg('KID, triangle spreading', 'Triangle not evaluated accurately!!', WARNING)
-    !if (mpp_pe().eq.mpp_root_pe()) then
-    if (mpp_pe().eq. 20) then
-      write(stderrunit,*) 'KID, Triangle corners:',Ax,Ay,Bx,By,Cx,Cy
-      write(stderrunit,*) 'KID, Triangle, Full Area', Area_Q1+ Area_Q2+ Area_Q3+ Area_Q4
-      write(stderrunit,*) 'KID, Triangle, Areas', Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
-      write(stderrunit,*) 'KID, Triangle, Areas', Error
-      write(stderrunit,*) 'KID, Key quadrant',Key_quadrant,Area_key_quadrant
-      write(stderrunit,*) 'KID, point in triangle',(point_in_triangle(Ax,Ay,Bx,By,Cx,Cy,0.,0.))
-      write(stderrunit,*) 'KID, halves',Area_Upper,Area_Lower,Area_Right,Area_Left
-    endif
-  endif
-
-end subroutine Triangle_divided_into_four_quadrants
-
-!> Rotates a point clockwise about origin and then translates by x0,y0
-subroutine rotate_and_translate(px, py, theta, x0, y0)
-  ! Arguments
-  real, intent(in) :: x0 !< x-direction shift
-  real, intent(in) :: y0 !< y-direction shift
-  real, intent(in) :: theta !< Angle to rotate (degrees)
-  real, intent(inout) :: px !< x-coordinate of point
-  real, intent(inout) :: py !< y-coordinate of point
-  ! Local variables
-  real :: px_temp,py_temp
-
-  ! Rotation
-  px_temp = ( cos(theta*pi/180)*px) + (sin(theta*pi/180)*py)
-  py_temp = (-sin(theta*pi/180)*px) + (cos(theta*pi/180)*py)
-
-  ! Translation
-  px= px_temp + x0
-  py= py_temp + y0
-end subroutine rotate_and_translate
-
-!> Areas of a hexagon divided into quadrants
-!!
-!! This subroutine divides a regular hexagon centered at x0,y0 with apothem H, and orientation theta into its intersection with the 4 quadrants.
-!! Theta=0 assumes that the apothem points upwards.
-!! Routine works by finding the corners of the 6 triangles, and then finding the intersection of each of these with each quadrant.
-!! \todo (also the rotation is not working yet)
-subroutine Hexagon_into_quadrants_using_triangles(x0, y0, H, theta, Area_hex ,Area_Q1, Area_Q2, Area_Q3, Area_Q4)
-  ! Arguments
-  real, intent(in) :: x0 !< x-coordinate of center of hexagon
-  real, intent(in) :: y0 !< y-coordinate of center of hexagon
-  real, intent(in) :: H !< Apothem (inner radius of hexagon)
-  real, intent(in) :: theta !< Orientation angle of hexagon
-  real, intent(out) :: Area_hex !< Area of hexagon
-  real, intent(out) :: Area_Q1 !< Are in quadrant 1
-  real, intent(out) :: Area_Q2 !< Are in quadrant 2
-  real, intent(out) :: Area_Q3 !< Are in quadrant 2
-  real, intent(out) :: Area_Q4 !< Are in quadrant 4
-  ! Local variables
-  real :: C1x, C2x, C3x, C4x, C5x, C6x
-  real :: C1y, C2y, C3y, C4y, C5y, C6y
-  real :: T12_Area, T12_Q1, T12_Q2, T12_Q3, T12_Q4
-  real :: T23_Area, T23_Q1, T23_Q2, T23_Q3, T23_Q4
-  real :: T34_Area, T34_Q1, T34_Q2, T34_Q3, T34_Q4
-  real :: T45_Area, T45_Q1, T45_Q2, T45_Q3, T45_Q4
-  real :: T56_Area, T56_Q1, T56_Q2, T56_Q3, T56_Q4
-  real :: T61_Area, T61_Q1, T61_Q2, T61_Q3, T61_Q4
-  real :: S, exact_hex_area, Error
-  real :: tol
-  integer :: stderrunit
-
-  ! Get the stderr unit number
-  stderrunit = stderr()
-  tol=1.e-10
-
-  ! Length of side of Hexagon
-  S=(2/sqrt(3.))*H
-
-  ! Finding positions of corners
-  C1x=S           ; C1y=0.  !Corner 1 (right)
-  C2x=H/sqrt(3.)  ; C2y=H;  !Corner 2 (top right)
-  C3x=-H/sqrt(3.) ; C3y=H;  !Corner 3 (top left)
-  C4x=-S          ; C4y=0.; !Corner 4 (left)
-  C5x=-H/sqrt(3.) ; C5y=-H; !Corner 5 (bottom left)
-  C6x=H/sqrt(3.)  ; C6y=-H; !Corner 6 (bottom right)
-
-  ! Finding positions of corners
-  call rotate_and_translate(C1x,C1y,theta,x0,y0)
-  call rotate_and_translate(C2x,C2y,theta,x0,y0)
-  call rotate_and_translate(C3x,C3y,theta,x0,y0)
-  call rotate_and_translate(C4x,C4y,theta,x0,y0)
-  call rotate_and_translate(C5x,C5y,theta,x0,y0)
-  call rotate_and_translate(C6x,C6y,theta,x0,y0)
-
-  ! Area of Hexagon is the sum of the triangles
-  call Triangle_divided_into_four_quadrants(x0,y0,C1x,C1y,C2x,C2y,T12_Area,T12_Q1,T12_Q2,T12_Q3,T12_Q4); !Triangle 012
-  call Triangle_divided_into_four_quadrants(x0,y0,C2x,C2y,C3x,C3y,T23_Area,T23_Q1,T23_Q2,T23_Q3,T23_Q4); !Triangle 023
-  call Triangle_divided_into_four_quadrants(x0,y0,C3x,C3y,C4x,C4y,T34_Area,T34_Q1,T34_Q2,T34_Q3,T34_Q4); !Triangle 034
-  call Triangle_divided_into_four_quadrants(x0,y0,C4x,C4y,C5x,C5y,T45_Area,T45_Q1,T45_Q2,T45_Q3,T45_Q4); !Triangle 045
-  call Triangle_divided_into_four_quadrants(x0,y0,C5x,C5y,C6x,C6y,T56_Area,T56_Q1,T56_Q2,T56_Q3,T56_Q4); !Triangle 056
-  call Triangle_divided_into_four_quadrants(x0,y0,C6x,C6y,C1x,C1y,T61_Area,T61_Q1,T61_Q2,T61_Q3,T61_Q4); !Triangle 061
-
-  ! Summing up the triangles
-  Area_hex=T12_Area+T23_Area+T34_Area+T45_Area+T56_Area+T61_Area
-  Area_Q1=T12_Q1+T23_Q1+T34_Q1+T45_Q1+T56_Q1+T61_Q1
-  Area_Q2=T12_Q2+T23_Q2+T34_Q2+T45_Q2+T56_Q2+T61_Q2
-  Area_Q3=T12_Q3+T23_Q3+T34_Q3+T45_Q3+T56_Q3+T61_Q3
-  Area_Q4=T12_Q4+T23_Q4+T34_Q4+T45_Q4+T56_Q4+T61_Q4
-
-  Area_Q1=max(Area_Q1,0.)
-  Area_Q2=max(Area_Q2,0.)
-  Area_Q3=max(Area_Q3,0.)
-  Area_Q4=max(Area_Q4,0.)
-
-  Error=Area_hex-(Area_Q1+Area_Q2+Area_Q3+Area_Q4)
-  if ((abs(Error)>tol))then
-    if (mpp_pe().eq.mpp_root_pe()) then
-      call error_mesg('KID, hexagonal spreading', 'Hexagon error is large!!', WARNING)
-      write(stderrunit,*) 'KID, hex error, H,x0,y0, Error', H, x0 , y0, Error
-      write(stderrunit,*) 'KID, hex error, Areas',Area_hex, (Area_Q1+Area_Q2 + Area_Q3+Area_Q4), Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
-      write(stderrunit,*) 'KID, Triangle1',C1x,C1y,C2x,C2y,T12_Area,T12_Q1,T12_Q2,T12_Q3,T12_Q4,(T12_Q1+T12_Q2+T12_Q3+T12_Q4-T12_Area)
-      write(stderrunit,*) 'KID, Triangle2',C2x,C2y,C3x,C3y,T23_Area,T23_Q1,T23_Q2,T23_Q3,T23_Q4,(T23_Q1+T23_Q2+T23_Q3+T23_Q4-T23_Area)
-      write(stderrunit,*) 'KID, Triangle3',C3x,C3y,C4x,C4y,T34_Area,T34_Q1,T34_Q2,T34_Q3,T34_Q4,(T34_Q1+T34_Q2+T34_Q3+T34_Q4-T34_Area)
-      write(stderrunit,*) 'KID, Triangle4',C4x,C4y,C5x,C5y,T45_Area,T45_Q1,T45_Q2,T45_Q3,T45_Q4,(T45_Q1+T45_Q2+T45_Q3+T45_Q4-T45_Area)
-      write(stderrunit,*) 'KID, Triangle5',C5x,C5y,C6x,C6y,T56_Area,T56_Q1,T56_Q2,T56_Q3,T56_Q4,(T56_Q1+T56_Q2+T56_Q3+T56_Q4-T56_Area)
-      write(stderrunit,*) 'KID, Triangle6',C6x,C6y,C1x,C1y,T61_Area,T61_Q1,T61_Q2,T61_Q3,T61_Q4,(T61_Q1+T61_Q2+T61_Q3+T61_Q4-T61_Area)
-    endif
-  endif
-
-  exact_hex_area=((3.*sqrt(3.)/2)*(S*S))
-  if (abs(Area_hex-exact_hex_area)>tol) then
-    call error_mesg('KID, hexagonal spreading', 'Hexagon not evaluated accurately!!', WARNING)
-    if (mpp_pe().eq.mpp_root_pe()) then
-      write(stderrunit,*) 'KID, hex calculations, H,x0,y0', H, x0 , y0
-      write(stderrunit,*) 'KID, hex calculations, Areas',Area_hex, (Area_Q1+Area_Q2 + Area_Q3+Area_Q4), Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
-    endif
-  endif
-
-  ! Adjust Areas so that the error is zero by subtracting the error from the largest sector.
-   if  (((Area_Q1>=Area_Q2) .and. (Area_Q1>=Area_Q3)) .and. (Area_Q1>=Area_Q4)) then
-     Area_Q1=Area_Q1+Error
-   elseif  (((Area_Q2>=Area_Q1) .and. (Area_Q2>=Area_Q3)) .and. (Area_Q2>=Area_Q4)) then
-     Area_Q2=Area_Q2+Error
-   elseif  (((Area_Q3>=Area_Q1) .and. (Area_Q3>=Area_Q2)) .and. (Area_Q3>=Area_Q4)) then
-     Area_Q3=Area_Q3+Error
-   elseif  (((Area_Q4>=Area_Q1) .and. (Area_Q4>=Area_Q2)) .and. (Area_Q4>=Area_Q3)) then
-     Area_Q4=Area_Q4+Error
-   else
-     call error_mesg('KID, hexagonal spreading', 'Error in hexagon is larger than any quadrant!!', WARNING)
-     if (mpp_pe().eq.mpp_root_pe()) then
-      write(stderrunit,*) 'KID, hex quadrants, H,x0,y0', H, x0 , y0, Error
-      write(stderrunit,*) 'KID, hex quadrants, Areas',Area_hex, (Area_Q1+Area_Q2 + Area_Q3+Area_Q4), Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
-     endif
-   endif
-
- end subroutine Hexagon_into_quadrants_using_triangles
+!!$!> Calculates the two areas of a triangle divided by an axis line
+!!$!!
+!!$!! This function calculates the area of a triangle on opposite sides of an axis when the
+!!$!! triangle is split with two points on one side, and one point on the other.
+!!$!! In this function, A is the point on one side of the axis, and B,C are on the opposite sides.
+!!$!! \todo You should change this name a little, so that it not similar the other routine.
+!!$subroutine Area_of_triangle_across_axes(Ax, Ay, Bx, By, Cx, Cy, axis1, Area_positive, Area_negative)
+!!$  ! Arguments
+!!$  real, intent(in) :: Ax !< x-position of corner A
+!!$  real, intent(in) :: Ay !< y-position of corner A
+!!$  real, intent(in) :: Bx !< x-position of corner B
+!!$  real, intent(in) :: By !< y-position of corner B
+!!$  real, intent(in) :: Cx !< x-position of corner C
+!!$  real, intent(in) :: Cy !< y-position of corner C
+!!$  character, intent(in) :: axis1 !< Either 'x' or 'y'
+!!$  real, intent(out) :: Area_positive !< Area on negative side of axis line
+!!$  real, intent(out) :: Area_negative !< Area on positive side of axis line
+!!$  ! Local variables
+!!$  real :: pABx, pABy, pACx, pACy, A0
+!!$  real :: A_half_triangle, A_triangle
+!!$
+!!$  A_triangle=Area_of_triangle(Ax,Ay,Bx,By,Cx,Cy)
+!!$
+!!$  call intercept_of_a_line(Ax,Ay,Bx,By,axis1,pABx, pABy)
+!!$  call intercept_of_a_line(Ax,Ay,Cx,Cy,axis1,pACx, pACy)
+!!$
+!!$  if (axis1=='x')  A0=Ay; !Value used for if statements (deciding up/down vs left/right)
+!!$  if (axis1=='y')  A0=Ax; !Value used for if statements (deciding up/down vs left/right)
+!!$
+!!$  A_half_triangle=Area_of_triangle(Ax,Ay,pABx,pABy,pACx,pACy)
+!!$  if (A0>=0.) then
+!!$    Area_positive= A_half_triangle
+!!$    Area_negative= A_triangle-A_half_triangle
+!!$  else
+!!$    Area_positive= A_triangle-A_half_triangle
+!!$    Area_negative= A_half_triangle
+!!$  endif
+!!$
+!!$end subroutine Area_of_triangle_across_axes
+!!$
+!!$!> Returns the axis intercept of a line AB
+!!$!!
+!!$!! This routine returns the position (x0,y0) at which a line AB intercepts the x or y axis.
+!!$!! The value No_intercept_val is returned when the line does not intercept the axis.
+!!$subroutine intercept_of_a_line(Ax, Ay, Bx, By, axes1, x0, y0)
+!!$  ! Arguments
+!!$  real, intent(in) :: Ax !< x-position of corner A
+!!$  real, intent(in) :: Ay !< y-position of corner A
+!!$  real, intent(in) :: Bx !< x-position of corner B
+!!$  real, intent(in) :: By !< y-position of corner B
+!!$  character, intent(in) :: axes1 !< Either 'x' or 'y'
+!!$  real, intent(out) :: x0 !< x-position of intercept
+!!$  real, intent(out) :: y0 !< y-position of intercept
+!!$  ! Local variables
+!!$  real :: No_intercept_val ! Huge value used to make sure that the intercept is outside the triangle in the parallel case.
+!!$
+!!$  No_intercept_val=100000000000. ! Huge value used to make sure that the intercept is outside the triangle in the parallel case.
+!!$  x0=No_intercept_val
+!!$  y0=No_intercept_val
+!!$
+!!$  if (axes1=='x') then ! x intercept
+!!$    if (Ay.ne.By) then
+!!$      x0=Ax -(((Ax-Bx)/(Ay-By))*Ay)
+!!$      y0=0.
+!!$    endif
+!!$  endif
+!!$
+!!$  if (axes1=='y') then ! y intercept
+!!$    if (Ax.ne.Bx) then
+!!$      x0=0.
+!!$      y0=-(((Ay-By)/(Ax-Bx))*Ax)+Ay
+!!$    endif
+!!$  endif
+!!$end subroutine intercept_of_a_line
+!!$
+!!$!> Calculates the area of a triangle on either side of an axis, if any.
+!!$!!
+!!$!! This routine gives you the area of a triangle on opposite sides of the axis specified.
+!!$!! It also takes care of the special case where the triangle is totally on one side.
+!!$!! This routine calls Area_of_triangle_across_axes to calculate the areas when the triangles are split.
+!!$subroutine divding_triangle_across_axes(Ax, Ay, Bx, By, Cx, Cy, axes1, Area_positive, Area_negative)
+!!$  ! Arguments
+!!$  real, intent(in) :: Ax !< x-position of corner A
+!!$  real, intent(in) :: Ay !< y-position of corner A
+!!$  real, intent(in) :: Bx !< x-position of corner B
+!!$  real, intent(in) :: By !< y-position of corner B
+!!$  real, intent(in) :: Cx !< x-position of corner C
+!!$  real, intent(in) :: Cy !< y-position of corner C
+!!$  character, intent(in) :: axes1 !< Either 'x' or 'y'
+!!$  real, intent(out) :: Area_positive !< Area on negative side of axis line
+!!$  real, intent(out) :: Area_negative !< Area on positive side of axis line
+!!$  ! Local variables
+!!$  real :: A0,B0,C0
+!!$  real A_triangle
+!!$
+!!$  if (axes1=='x') then ! Use the y-coordinates for if statements to see which side of the line you are on
+!!$    A0=Ay
+!!$    B0=By
+!!$    C0=Cy
+!!$  endif
+!!$  if (axes1=='y') then ! Use the y-coordinates for if statements to see which side of the line you are on
+!!$    A0=Ax
+!!$    B0=Bx
+!!$    C0=Cx
+!!$  endif
+!!$
+!!$  A_triangle=Area_of_triangle(Ax,Ay,Bx,By,Cx,Cy)
+!!$  if ((B0*C0)>0.) then ! B and C are on the same side  (and non-zero)
+!!$    if ((A0*B0).ge.0.) then ! all three on the same side (if it equals zero, then A0=0 and the others are not)
+!!$      if ((A0>0.)  .or.  ((A0==0.) .and.  (B0>0.))) then
+!!$        Area_positive= A_triangle
+!!$        Area_negative= 0.
+!!$      else
+!!$        Area_positive= 0.
+!!$        Area_negative= A_triangle
+!!$      endif
+!!$    else  !A is on the opposite side to B and C
+!!$      call Area_of_triangle_across_axes(Ax,Ay,Bx,By,Cx,Cy,axes1,Area_positive, Area_negative)
+!!$    endif
+!!$
+!!$  elseif ((B0*C0)<0.) then !B and C are on the opposite sides
+!!$    if ((A0*B0).ge. 0.) then !C is all alone
+!!$      call Area_of_triangle_across_axes(Cx,Cy,Bx,By,Ax,Ay,axes1,Area_positive, Area_negative)
+!!$    else !B is all alone
+!!$      call Area_of_triangle_across_axes(Bx,By,Cx,Cy,Ax,Ay,axes1,Area_positive, Area_negative)
+!!$    endif
+!!$
+!!$  else  !This is the case when either B or C is equal to zero (or both), A0 could be zero too.
+!!$    if (((A0.eq.0.) .and. (B0.eq.0.)) .and. (C0.eq.0.)) then
+!!$      Area_positive= 0.
+!!$      Area_negative= 0.
+!!$    elseif ((A0*B0<0.)  .or.  (A0*C0<0.)) then    !A, B are on opposite sides, and C is zero.  OR  A, C are on opposite sides, and B is zero.
+!!$      call Area_of_triangle_across_axes(Ax,Ay,Bx,By,Cx,Cy,axes1,Area_positive, Area_negative)
+!!$    elseif (((A0*B0>0.) .or. (A0*C0>0.)) .or. (((abs(A0)>0.) .and. (B0==0.)) .and. (C0==0.))) then
+!!$      if (A0>0.) then
+!!$        Area_positive= A_triangle
+!!$        Area_negative= 0.
+!!$      else
+!!$        Area_positive= 0.
+!!$        Area_negative= A_triangle
+!!$      endif
+!!$
+!!$    elseif (A0.eq. 0.) then   !(one of B,C is zero too)
+!!$      if ((B0>0.) .or. (C0>0.)) then
+!!$        Area_positive= A_triangle
+!!$        Area_negative= 0.
+!!$      elseif ((B0<0.) .or. (C0<0.)) then
+!!$        Area_positive= 0.
+!!$        Area_negative= A_triangle
+!!$      else
+!!$        call error_mesg('KID, iceberg_run', 'Logical error inside triangle dividing routine', FATAL)
+!!$      endif
+!!$    else
+!!$      call error_mesg('KID, iceberg_run', 'Another logical error inside triangle dividing routine', FATAL)
+!!$    endif
+!!$  endif
+!!$end subroutine divding_triangle_across_axes
+!!$
+!!$!> Areas of a triangle divided into quadrants
+!!$!!
+!!$!! This routine takes a triangle, and finds the intersection with the four quadrants.
+!!$subroutine Triangle_divided_into_four_quadrants(Ax, Ay, Bx, By, Cx, Cy, Area_triangle, Area_Q1, Area_Q2 ,Area_Q3 ,Area_Q4)
+!!$  ! Arguments
+!!$  real, intent(in) :: Ax !< x-position of corner A
+!!$  real, intent(in) :: Ay !< y-position of corner A
+!!$  real, intent(in) :: Bx !< x-position of corner B
+!!$  real, intent(in) :: By !< y-position of corner B
+!!$  real, intent(in) :: Cx !< x-position of corner C
+!!$  real, intent(in) :: Cy !< y-position of corner C
+!!$  real, intent(out) :: Area_triangle !< Are of triangle
+!!$  real, intent(out) :: Area_Q1 !< Are in quadrant 1
+!!$  real, intent(out) :: Area_Q2 !< Are in quadrant 2
+!!$  real, intent(out) :: Area_Q3 !< Are in quadrant 2
+!!$  real, intent(out) :: Area_Q4 !< Are in quadrant 4
+!!$  ! Local variables
+!!$  real :: Area_Upper, Area_Lower, Area_Right, Area_Left
+!!$  real :: px, py , qx , qy
+!!$  real :: Area_key_quadrant,Error
+!!$  real :: tol
+!!$  integer :: Key_quadrant
+!!$  integer ::sig_fig
+!!$  integer :: stderrunit
+!!$
+!!$  ! Get the stderr unit number
+!!$  stderrunit = stderr()
+!!$  tol=1.e-10
+!!$
+!!$  Area_triangle=Area_of_triangle(Ax,Ay,Bx,By,Cx,Cy)
+!!$
+!!$  ! Calculating area across axes
+!!$  call divding_triangle_across_axes(Ax,Ay,Bx,By,Cx,Cy,'x',Area_Upper ,Area_Lower)
+!!$  call divding_triangle_across_axes(Ax,Ay,Bx,By,Cx,Cy,'y',Area_Right ,Area_Left)
+!!$
+!!$  ! Decide if the origin is in the triangle. If so, then you have to divide the area 4 ways
+!!$  ! This is done by finding a quadrant where the intersection between the triangle and quadrant forms a new triangle
+!!$  ! (This occurs when on of the sides of the triangle  intersects both the x and y axis)
+!!$  if (point_in_triangle(Ax,Ay,Bx,By,Cx,Cy,0.,0.)) then
+!!$    ! Find a line in the triangle that cuts both axes in/on the triangle
+!!$    call intercept_of_a_line(Ax,Ay,Bx,By,'x',px,py); !x_intercept
+!!$    call intercept_of_a_line(Ax,Ay,Bx,By,'y',qx,qy); !y_intercept
+!!$    ! Note that the 1. here means that we include points on the boundary of the triangle.
+!!$    if (.not.((point_in_interval(Ax,Ay,Bx,By,px,py)) .and. (point_in_interval(Ax,Ay,Bx,By,qx,qy)))) then
+!!$      call intercept_of_a_line(Ax,Ay,Cx,Cy,'x',px,py); !x_intercept
+!!$      call intercept_of_a_line(Ax,Ay,Cx,Cy,'y',qx,qy); !y_intercept
+!!$      if (.not.((point_in_interval(Ax,Ay,Cx,Cy,px,py)) .and. (point_in_interval(Ax,Ay,Cx,Cy,qx,qy)))) then
+!!$        call intercept_of_a_line(Bx,By,Cx,Cy,'x',px,py); !x_intercept
+!!$        call intercept_of_a_line(Bx,By,Cx,Cy,'y',qx,qy); !y_intercept
+!!$        if (.not.((point_in_interval(Bx,By,Cx,Cy,px,py)) .and. (point_in_interval(Bx,By,Cx,Cy,qx,qy)))) then
+!!$          ! You should not get here, but there might be some bugs in the code to do with points exactly falling on axes.
+!!$          !if (mpp_pe().eq.12) then
+!!$            write(stderrunit,*) 'KID,corners', Ax,Ay,Bx,By,Cx,Cy
+!!$          !endif
+!!$          call error_mesg('KID, iceberg_run', 'Something went wrong with Triangle_divide_into_four_quadrants', FATAL)
+!!$        endif
+!!$      endif
+!!$    endif
+!!$
+!!$    ! Assigning quadrants. Key_quadrant is the quadrant with the baby triangle in it.
+!!$    Area_key_quadrant=Area_of_triangle(px,py,qx,qy,0.,0.)
+!!$    if ((px.ge. 0.) .and. (qy.ge. 0.)) then  !First quadrant
+!!$      Key_quadrant=1
+!!$    elseif ((px.lt.0.) .and. (qy.ge. 0.)) then  !Second quadrant
+!!$      Key_quadrant=2
+!!$    elseif ((px.lt. 0.) .and. (qy.lt. 0.)) then !Third quadrant
+!!$      Key_quadrant=3
+!!$    elseif ((px.ge. 0.) .and. (qy.lt. 0.)) then !Forth quadrant
+!!$      Key_quadrant=4
+!!$    else  !
+!!$      call error_mesg('KID, iceberg_run', 'None of the quadrants are Key', WARNING)
+!!$      write(stderrunit,*) 'KID, Triangle, px,qy', px,qy
+!!$    endif
+!!$
+!!$  else ! At least one quadrant is empty, and this can be used to find the areas in the other quadrant.  Assigning quadrants. Key_quadrant is the empty quadrant.
+!!$    Area_key_quadrant=0
+!!$    if      ( (.not. ((((Ax>0.) .and. (Ay>0.)) .or. ((Bx>0.) .and. (By> 0.))) .or. ((Cx>0.) .and. (Cy> 0.)))) .and. ((Area_Upper+Area_Right).le.Area_triangle) ) then
+!!$      ! No points land in this quadrant and triangle does not cross the quadrant
+!!$      Key_quadrant=1
+!!$    elseif  ( (.not. ((((Ax<0.) .and. (Ay>0)) .or. ((Bx<0.) .and. (By>0.))) .or. ((Cx<0.) .and. (Cy>0.)))) .and. ((Area_Upper+Area_Left).le. Area_triangle) ) then
+!!$      Key_quadrant=2
+!!$    elseif  ( (.not. ((((Ax<0.) .and. (Ay<0.)) .or. ((Bx<0.) .and. (By< 0.))) .or. ((Cx<0.) .and. (Cy< 0.)))) .and. ((Area_Lower+Area_Left) .le.Area_triangle) ) then
+!!$      Key_quadrant=3
+!!$    else
+!!$      Key_quadrant=4
+!!$    endif
+!!$  endif
+!!$
+!!$  ! Assign values to quadrants
+!!$  if (Key_quadrant .eq. 1) then
+!!$    Area_Q1=Area_key_quadrant
+!!$    Area_Q2=Area_Upper-Area_Q1
+!!$    Area_Q4=Area_Right-Area_Q1
+!!$    !Area_Q3=Area_Left-Area_Q2 ! These lines have been changes so that the sum of the 4 quadrants exactly matches the triangle area.
+!!$    Area_Q3=Area_triangle-(Area_Q1+Area_Q2+Area_Q4)
+!!$  elseif (Key_quadrant .eq. 2) then
+!!$    Area_Q2=Area_key_quadrant
+!!$    Area_Q1=Area_Upper-Area_Q2
+!!$    Area_Q4=Area_Right-Area_Q1
+!!$    !Area_Q3=Area_Left-Area_Q2
+!!$    Area_Q3=Area_triangle-(Area_Q1+Area_Q2+Area_Q4)
+!!$  elseif (Key_quadrant==3) then
+!!$    Area_Q3=Area_key_quadrant
+!!$    Area_Q2=Area_Left-Area_Q3
+!!$    Area_Q1=Area_Upper-Area_Q2
+!!$    !Area_Q4=Area_Right-Area_Q1
+!!$    Area_Q4=Area_triangle-(Area_Q1+Area_Q2+Area_Q3)
+!!$  elseif (Key_quadrant==4) then
+!!$    Area_Q4=Area_key_quadrant
+!!$    Area_Q1=Area_Right-Area_Q4
+!!$    Area_Q2=Area_Upper-Area_Q1
+!!$    !Area_Q3=Area_Left-Area_Q2
+!!$    Area_Q3=Area_triangle-(Area_Q1+Area_Q2+Area_Q4)
+!!$  else
+!!$    call error_mesg('KID, iceberg_run', 'Logical error inside triangle into four quadrants. Should not get here.', FATAL)
+!!$  endif
+!!$
+!!$  Area_Q1=max(Area_Q1,0.)
+!!$  Area_Q2=max(Area_Q2,0.)
+!!$  Area_Q3=max(Area_Q3,0.)
+!!$  Area_Q4=max(Area_Q4,0.)
+!!$
+!!$
+!!$  Error=abs(Area_Q1+Area_Q2+Area_Q3+Area_Q4-Area_triangle)
+!!$  if (Error>tol) then
+!!$    call error_mesg('KID, triangle spreading', 'Triangle not evaluated accurately!!', WARNING)
+!!$    !if (mpp_pe().eq.mpp_root_pe()) then
+!!$    if (mpp_pe().eq. 20) then
+!!$      write(stderrunit,*) 'KID, Triangle corners:',Ax,Ay,Bx,By,Cx,Cy
+!!$      write(stderrunit,*) 'KID, Triangle, Full Area', Area_Q1+ Area_Q2+ Area_Q3+ Area_Q4
+!!$      write(stderrunit,*) 'KID, Triangle, Areas', Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
+!!$      write(stderrunit,*) 'KID, Triangle, Areas', Error
+!!$      write(stderrunit,*) 'KID, Key quadrant',Key_quadrant,Area_key_quadrant
+!!$      write(stderrunit,*) 'KID, point in triangle',(point_in_triangle(Ax,Ay,Bx,By,Cx,Cy,0.,0.))
+!!$      write(stderrunit,*) 'KID, halves',Area_Upper,Area_Lower,Area_Right,Area_Left
+!!$    endif
+!!$  endif
+!!$
+!!$end subroutine Triangle_divided_into_four_quadrants
+!!$
+!!$!> Rotates a point clockwise about origin and then translates by x0,y0
+!!$subroutine rotate_and_translate(px, py, theta, x0, y0)
+!!$  ! Arguments
+!!$  real, intent(in) :: x0 !< x-direction shift
+!!$  real, intent(in) :: y0 !< y-direction shift
+!!$  real, intent(in) :: theta !< Angle to rotate (degrees)
+!!$  real, intent(inout) :: px !< x-coordinate of point
+!!$  real, intent(inout) :: py !< y-coordinate of point
+!!$  ! Local variables
+!!$  real :: px_temp,py_temp
+!!$
+!!$  ! Rotation
+!!$  px_temp = ( cos(theta*pi/180)*px) + (sin(theta*pi/180)*py)
+!!$  py_temp = (-sin(theta*pi/180)*px) + (cos(theta*pi/180)*py)
+!!$
+!!$  ! Translation
+!!$  px= px_temp + x0
+!!$  py= py_temp + y0
+!!$end subroutine rotate_and_translate
+!!$
+!!$!> Areas of a hexagon divided into quadrants
+!!$!!
+!!$!! This subroutine divides a regular hexagon centered at x0,y0 with apothem H, and orientation theta into its intersection with the 4 quadrants.
+!!$!! Theta=0 assumes that the apothem points upwards.
+!!$!! Routine works by finding the corners of the 6 triangles, and then finding the intersection of each of these with each quadrant.
+!!$!! \todo (also the rotation is not working yet)
+!!$subroutine Hexagon_into_quadrants_using_triangles(x0, y0, H, theta, Area_hex ,Area_Q1, Area_Q2, Area_Q3, Area_Q4)
+!!$  ! Arguments
+!!$  real, intent(in) :: x0 !< x-coordinate of center of hexagon
+!!$  real, intent(in) :: y0 !< y-coordinate of center of hexagon
+!!$  real, intent(in) :: H !< Apothem (inner radius of hexagon)
+!!$  real, intent(in) :: theta !< Orientation angle of hexagon
+!!$  real, intent(out) :: Area_hex !< Area of hexagon
+!!$  real, intent(out) :: Area_Q1 !< Are in quadrant 1
+!!$  real, intent(out) :: Area_Q2 !< Are in quadrant 2
+!!$  real, intent(out) :: Area_Q3 !< Are in quadrant 2
+!!$  real, intent(out) :: Area_Q4 !< Are in quadrant 4
+!!$  ! Local variables
+!!$  real :: C1x, C2x, C3x, C4x, C5x, C6x
+!!$  real :: C1y, C2y, C3y, C4y, C5y, C6y
+!!$  real :: T12_Area, T12_Q1, T12_Q2, T12_Q3, T12_Q4
+!!$  real :: T23_Area, T23_Q1, T23_Q2, T23_Q3, T23_Q4
+!!$  real :: T34_Area, T34_Q1, T34_Q2, T34_Q3, T34_Q4
+!!$  real :: T45_Area, T45_Q1, T45_Q2, T45_Q3, T45_Q4
+!!$  real :: T56_Area, T56_Q1, T56_Q2, T56_Q3, T56_Q4
+!!$  real :: T61_Area, T61_Q1, T61_Q2, T61_Q3, T61_Q4
+!!$  real :: S, exact_hex_area, Error
+!!$  real :: tol
+!!$  integer :: stderrunit
+!!$
+!!$  ! Get the stderr unit number
+!!$  stderrunit = stderr()
+!!$  tol=1.e-10
+!!$
+!!$  ! Length of side of Hexagon
+!!$  S=(2/sqrt(3.))*H
+!!$
+!!$  ! Finding positions of corners
+!!$  C1x=S           ; C1y=0.  !Corner 1 (right)
+!!$  C2x=H/sqrt(3.)  ; C2y=H;  !Corner 2 (top right)
+!!$  C3x=-H/sqrt(3.) ; C3y=H;  !Corner 3 (top left)
+!!$  C4x=-S          ; C4y=0.; !Corner 4 (left)
+!!$  C5x=-H/sqrt(3.) ; C5y=-H; !Corner 5 (bottom left)
+!!$  C6x=H/sqrt(3.)  ; C6y=-H; !Corner 6 (bottom right)
+!!$
+!!$  ! Finding positions of corners
+!!$  call rotate_and_translate(C1x,C1y,theta,x0,y0)
+!!$  call rotate_and_translate(C2x,C2y,theta,x0,y0)
+!!$  call rotate_and_translate(C3x,C3y,theta,x0,y0)
+!!$  call rotate_and_translate(C4x,C4y,theta,x0,y0)
+!!$  call rotate_and_translate(C5x,C5y,theta,x0,y0)
+!!$  call rotate_and_translate(C6x,C6y,theta,x0,y0)
+!!$
+!!$  ! Area of Hexagon is the sum of the triangles
+!!$  call Triangle_divided_into_four_quadrants(x0,y0,C1x,C1y,C2x,C2y,T12_Area,T12_Q1,T12_Q2,T12_Q3,T12_Q4); !Triangle 012
+!!$  call Triangle_divided_into_four_quadrants(x0,y0,C2x,C2y,C3x,C3y,T23_Area,T23_Q1,T23_Q2,T23_Q3,T23_Q4); !Triangle 023
+!!$  call Triangle_divided_into_four_quadrants(x0,y0,C3x,C3y,C4x,C4y,T34_Area,T34_Q1,T34_Q2,T34_Q3,T34_Q4); !Triangle 034
+!!$  call Triangle_divided_into_four_quadrants(x0,y0,C4x,C4y,C5x,C5y,T45_Area,T45_Q1,T45_Q2,T45_Q3,T45_Q4); !Triangle 045
+!!$  call Triangle_divided_into_four_quadrants(x0,y0,C5x,C5y,C6x,C6y,T56_Area,T56_Q1,T56_Q2,T56_Q3,T56_Q4); !Triangle 056
+!!$  call Triangle_divided_into_four_quadrants(x0,y0,C6x,C6y,C1x,C1y,T61_Area,T61_Q1,T61_Q2,T61_Q3,T61_Q4); !Triangle 061
+!!$
+!!$  ! Summing up the triangles
+!!$  Area_hex=T12_Area+T23_Area+T34_Area+T45_Area+T56_Area+T61_Area
+!!$  Area_Q1=T12_Q1+T23_Q1+T34_Q1+T45_Q1+T56_Q1+T61_Q1
+!!$  Area_Q2=T12_Q2+T23_Q2+T34_Q2+T45_Q2+T56_Q2+T61_Q2
+!!$  Area_Q3=T12_Q3+T23_Q3+T34_Q3+T45_Q3+T56_Q3+T61_Q3
+!!$  Area_Q4=T12_Q4+T23_Q4+T34_Q4+T45_Q4+T56_Q4+T61_Q4
+!!$
+!!$  Area_Q1=max(Area_Q1,0.)
+!!$  Area_Q2=max(Area_Q2,0.)
+!!$  Area_Q3=max(Area_Q3,0.)
+!!$  Area_Q4=max(Area_Q4,0.)
+!!$
+!!$  Error=Area_hex-(Area_Q1+Area_Q2+Area_Q3+Area_Q4)
+!!$  if ((abs(Error)>tol))then
+!!$    if (mpp_pe().eq.mpp_root_pe()) then
+!!$      call error_mesg('KID, hexagonal spreading', 'Hexagon error is large!!', WARNING)
+!!$      write(stderrunit,*) 'KID, hex error, H,x0,y0, Error', H, x0 , y0, Error
+!!$      write(stderrunit,*) 'KID, hex error, Areas',Area_hex, (Area_Q1+Area_Q2 + Area_Q3+Area_Q4), Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
+!!$      write(stderrunit,*) 'KID, Triangle1',C1x,C1y,C2x,C2y,T12_Area,T12_Q1,T12_Q2,T12_Q3,T12_Q4,(T12_Q1+T12_Q2+T12_Q3+T12_Q4-T12_Area)
+!!$      write(stderrunit,*) 'KID, Triangle2',C2x,C2y,C3x,C3y,T23_Area,T23_Q1,T23_Q2,T23_Q3,T23_Q4,(T23_Q1+T23_Q2+T23_Q3+T23_Q4-T23_Area)
+!!$      write(stderrunit,*) 'KID, Triangle3',C3x,C3y,C4x,C4y,T34_Area,T34_Q1,T34_Q2,T34_Q3,T34_Q4,(T34_Q1+T34_Q2+T34_Q3+T34_Q4-T34_Area)
+!!$      write(stderrunit,*) 'KID, Triangle4',C4x,C4y,C5x,C5y,T45_Area,T45_Q1,T45_Q2,T45_Q3,T45_Q4,(T45_Q1+T45_Q2+T45_Q3+T45_Q4-T45_Area)
+!!$      write(stderrunit,*) 'KID, Triangle5',C5x,C5y,C6x,C6y,T56_Area,T56_Q1,T56_Q2,T56_Q3,T56_Q4,(T56_Q1+T56_Q2+T56_Q3+T56_Q4-T56_Area)
+!!$      write(stderrunit,*) 'KID, Triangle6',C6x,C6y,C1x,C1y,T61_Area,T61_Q1,T61_Q2,T61_Q3,T61_Q4,(T61_Q1+T61_Q2+T61_Q3+T61_Q4-T61_Area)
+!!$    endif
+!!$  endif
+!!$
+!!$  exact_hex_area=((3.*sqrt(3.)/2)*(S*S))
+!!$  if (abs(Area_hex-exact_hex_area)>tol) then
+!!$    call error_mesg('KID, hexagonal spreading', 'Hexagon not evaluated accurately!!', WARNING)
+!!$    if (mpp_pe().eq.mpp_root_pe()) then
+!!$      write(stderrunit,*) 'KID, hex calculations, H,x0,y0', H, x0 , y0
+!!$      write(stderrunit,*) 'KID, hex calculations, Areas',Area_hex, (Area_Q1+Area_Q2 + Area_Q3+Area_Q4), Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
+!!$    endif
+!!$  endif
+!!$
+!!$  ! Adjust Areas so that the error is zero by subtracting the error from the largest sector.
+!!$   if  (((Area_Q1>=Area_Q2) .and. (Area_Q1>=Area_Q3)) .and. (Area_Q1>=Area_Q4)) then
+!!$     Area_Q1=Area_Q1+Error
+!!$   elseif  (((Area_Q2>=Area_Q1) .and. (Area_Q2>=Area_Q3)) .and. (Area_Q2>=Area_Q4)) then
+!!$     Area_Q2=Area_Q2+Error
+!!$   elseif  (((Area_Q3>=Area_Q1) .and. (Area_Q3>=Area_Q2)) .and. (Area_Q3>=Area_Q4)) then
+!!$     Area_Q3=Area_Q3+Error
+!!$   elseif  (((Area_Q4>=Area_Q1) .and. (Area_Q4>=Area_Q2)) .and. (Area_Q4>=Area_Q3)) then
+!!$     Area_Q4=Area_Q4+Error
+!!$   else
+!!$     call error_mesg('KID, hexagonal spreading', 'Error in hexagon is larger than any quadrant!!', WARNING)
+!!$     if (mpp_pe().eq.mpp_root_pe()) then
+!!$      write(stderrunit,*) 'KID, hex quadrants, H,x0,y0', H, x0 , y0, Error
+!!$      write(stderrunit,*) 'KID, hex quadrants, Areas',Area_hex, (Area_Q1+Area_Q2 + Area_Q3+Area_Q4), Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
+!!$     endif
+!!$   endif
+!!$
+!!$ end subroutine Hexagon_into_quadrants_using_triangles
 
 !> Loop through all bergs and call interp_flds
 subroutine interp_gridded_fields_to_bergs(bergs)
@@ -5272,16 +5278,16 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   real, dimension(:,:), optional, pointer :: mass_berg !< Mass of bergs (kg)
   real, dimension(:,:), optional, pointer :: ustar_berg !< Friction velocity on base of bergs (m/s)
   real, dimension(:,:), optional, pointer :: area_berg !< Area of bergs (m2)
-  real, dimension(:,:), optional, intent(in)  :: calve_mask        !< Mask for calving of tabular bonded bergs
-  real, dimension(:,:), optional, intent(in)  :: mass_shelf        !< The ice shelf mass/cell area (kg m-2)
-  real, dimension(:,:), optional, intent(in)  :: area_shelf        !< The area of each grid cell covered by
-                                                                   !! the ice shelf [m2]
-  real, dimension(:,:), optional, intent(out) :: frac_cberg        !< Cell fraction of partially-calved bonded bergs from
-                                                                   !! the ice sheet [nondim]
-  real, dimension(:,:), optional, intent(out) :: frac_cberg_calved !< Cell fraction of fully-calved bonded bergs from
-                                                                   !! the ice sheet [nondim]
+  real, dimension(:,:), optional, pointer, intent(in)  :: calve_mask        !< Mask for calving of tabular bonded bergs
+  real, dimension(:,:), optional, pointer, intent(in)  :: mass_shelf        !< The ice shelf mass/cell area (kg m-2)
+  real, dimension(:,:), optional, pointer, intent(in)  :: area_shelf        !< The area of each grid cell covered by
+                                                                            !! the ice shelf [m2]
+  real, dimension(:,:), optional, pointer, intent(out) :: frac_cberg        !< Cell fraction of partially-calved bonded bergs from
+                                                                            !! the ice sheet [nondim]
+  real, dimension(:,:), optional, pointer, intent(out) :: frac_cberg_calved !< Cell fraction of fully-calved bonded bergs from
+                                                                            !! the ice sheet [nondim]
   ! Local variables
-  type(tabular_calving_state) :: TC
+  type(tabular_calving_state), pointer :: TC
   integer :: iyr, imon, iday, ihr, imin, isec, k
   type(icebergs_gridded), pointer :: grd
   logical :: lerr, sample_traj, write_traj, lbudget, lverbose, check_bond_quality
@@ -6308,92 +6314,92 @@ subroutine icebergs_incr_mass(bergs, mass, Time)
 
 end subroutine icebergs_incr_mass
 
-!> Sums up a berg property into a gridded field
-subroutine sum_up_spread_fields(bergs, field, field_name, ignore_mask_in)
-  ! Arguments
-  type(icebergs), pointer :: bergs !< Container for all types and memory
-  real, dimension(bergs%grd%isc:bergs%grd%iec,bergs%grd%jsc:bergs%grd%jec), intent(out) :: field !< Gridded field
-  character(len=4), intent(in) :: field_name !< Name of field to grid
-  logical, intent(in), optional :: ignore_mask_in !< Do not mask where grid area or mask = 0. Needed for frac_cberg_calved and frac_cberg variables.
-  ! Local variables
-  integer :: i, j
-  type(icebergs_gridded), pointer :: grd
-  real :: dmda
-  logical :: lerr, ignore_mask
-  real, dimension(bergs%grd%isd:bergs%grd%ied, bergs%grd%jsd:bergs%grd%jed,9) :: var_on_ocean   !Variable being spread onto the ocean  (mass, area, Uvel, Vvel)
-  integer :: stderrunit
-
-  if (present(ignore_mask_in)) then
-    ignore_mask=ignore_mask_in
-  else
-    ignore_mask=.false.
-  endif
-
-  ! Get the stderr unit number
-  stderrunit = stderr()
-  ! For convenience
-  grd=>bergs%grd
-
-  field(:,:)=0.
-
-  !Deciding which varibale to spread across cells across grid cells
-  if (field_name=='mass') var_on_ocean(:,:,:)=grd%mass_on_ocean(:,:,:)
-  if (field_name=='area') var_on_ocean(:,:,:)=grd%area_on_ocean(:,:,:)
-  if (field_name=='Uvel') var_on_ocean(:,:,:)=grd%Uvel_on_ocean(:,:,:)
-  if (field_name=='Vvel') var_on_ocean(:,:,:)=grd%Vvel_on_ocean(:,:,:)
-  if (field_name=='frac_cberg_calved') var_on_ocean(:,:,:)=grd%frac_cberg_calved(:,:,:)
-  if (field_name=='frac_cberg')        var_on_ocean(:,:,:)=grd%frac_cberg(:,:,:)
-  if (field_name=='pf_area')           var_on_ocean(:,:,:)=grd%pf_area(:,:,:)
-
-  !This line has been removed, for that routine can be used for other fields
-  !if (.not. bergs%add_weight_to_ocean) return
-
-  !Update the halos of the var_on_ocean
-  call mpp_update_domains(var_on_ocean, grd%domain)
-
-  !Rotatine when old_bug_rotated_weights is on  - we should remove this.
-  if (.not. old_bug_rotated_weights) then
-    do j=grd%jsd, grd%jed; do i=grd%isd, grd%ied
-      if (grd%parity_x(i,j)<0.) then
-        ! This block assumes both parity_x and parity_y are negative
-        ! (i.e. a 180 degree rotation). In general, we should handle
-        ! +/- 90 degree rotations as well but in CM2*-class models
-        ! this is not necessary. -aja
-        dmda=var_on_ocean(i,j,9); var_on_ocean(i,j,9)=var_on_ocean(i,j,1); var_on_ocean(i,j,1)=dmda
-        dmda=var_on_ocean(i,j,8); var_on_ocean(i,j,8)=var_on_ocean(i,j,2); var_on_ocean(i,j,2)=dmda
-        dmda=var_on_ocean(i,j,7); var_on_ocean(i,j,7)=var_on_ocean(i,j,3); var_on_ocean(i,j,3)=dmda
-        dmda=var_on_ocean(i,j,6); var_on_ocean(i,j,6)=var_on_ocean(i,j,4); var_on_ocean(i,j,4)=dmda
-      endif
-    enddo; enddo
-  endif
-
-  !Here we add the contribution of the 9 cells. This is the heart of the routine.
-  do j=grd%jsc, grd%jec; do i=grd%isc, grd%iec
-    dmda=var_on_ocean(i,j,5) &
-         + ( ( (var_on_ocean(i-1,j-1,9)+var_on_ocean(i+1,j+1,1))   &
-         +     (var_on_ocean(i+1,j-1,7)+var_on_ocean(i-1,j+1,3)) ) &
-         +   ( (var_on_ocean(i-1,j  ,6)+var_on_ocean(i+1,j  ,4))   &
-         +     (var_on_ocean(i  ,j-1,8)+var_on_ocean(i  ,j+1,2)) ) )
-    if (grd%area(i,j)>0) dmda=dmda/grd%area(i,j)
-    if (.not. ignore_mask) dmda=dmda*grd%msk(i,j)
-
-    !Make sure that area <=1.0
-    if (field_name=='area') dmda=min(dmda,1.0)
-
-    field(i,j)=dmda
-  enddo; enddo
-
-  if (debug) then
-    grd%tmp(:,:)=0.; grd%tmp(grd%isc:grd%iec,grd%jsc:grd%jec)=field
-    if (field_name=='mass') then
-      call grd_chksum3(grd, grd%mass_on_ocean, 'mass bergs (incr)')
-      call grd_chksum2(grd, grd%tmp, 'mass out (incr)')
-    elseif (field_name=='area') then
-      call grd_chksum3(grd, grd%area_on_ocean, 'area bergs (incr)')
-      call grd_chksum2(grd, grd%tmp, 'area out (incr)')
-    endif
- endif
-end subroutine sum_up_spread_fields
+!!$!> Sums up a berg property into a gridded field
+!!$subroutine sum_up_spread_fields(bergs, field, field_name, ignore_mask_in)
+!!$  ! Arguments
+!!$  type(icebergs), pointer :: bergs !< Container for all types and memory
+!!$  real, dimension(bergs%grd%isc:bergs%grd%iec,bergs%grd%jsc:bergs%grd%jec), intent(out) :: field !< Gridded field
+!!$  character(len=4), intent(in) :: field_name !< Name of field to grid
+!!$  logical, intent(in), optional :: ignore_mask_in !< Do not mask where grid area or mask = 0. Needed for frac_cberg_calved and frac_cberg variables.
+!!$  ! Local variables
+!!$  integer :: i, j
+!!$  type(icebergs_gridded), pointer :: grd
+!!$  real :: dmda
+!!$  logical :: lerr, ignore_mask
+!!$  real, dimension(bergs%grd%isd:bergs%grd%ied, bergs%grd%jsd:bergs%grd%jed,9) :: var_on_ocean   !Variable being spread onto the ocean  (mass, area, Uvel, Vvel)
+!!$  integer :: stderrunit
+!!$
+!!$  if (present(ignore_mask_in)) then
+!!$    ignore_mask=ignore_mask_in
+!!$  else
+!!$    ignore_mask=.false.
+!!$  endif
+!!$
+!!$  ! Get the stderr unit number
+!!$  stderrunit = stderr()
+!!$  ! For convenience
+!!$  grd=>bergs%grd
+!!$
+!!$  field(:,:)=0.
+!!$
+!!$  !Deciding which varibale to spread across cells across grid cells
+!!$  if (field_name=='mass') var_on_ocean(:,:,:)=grd%mass_on_ocean(:,:,:)
+!!$  if (field_name=='area') var_on_ocean(:,:,:)=grd%area_on_ocean(:,:,:)
+!!$  if (field_name=='Uvel') var_on_ocean(:,:,:)=grd%Uvel_on_ocean(:,:,:)
+!!$  if (field_name=='Vvel') var_on_ocean(:,:,:)=grd%Vvel_on_ocean(:,:,:)
+!!$  if (field_name=='frac_cberg_calved') var_on_ocean(:,:,:)=grd%frac_cberg_calved(:,:,:)
+!!$  if (field_name=='frac_cberg')        var_on_ocean(:,:,:)=grd%frac_cberg(:,:,:)
+!!$  if (field_name=='pf_area')           var_on_ocean(:,:,:)=grd%pf_area(:,:,:)
+!!$
+!!$  !This line has been removed, for that routine can be used for other fields
+!!$  !if (.not. bergs%add_weight_to_ocean) return
+!!$
+!!$  !Update the halos of the var_on_ocean
+!!$  call mpp_update_domains(var_on_ocean, grd%domain)
+!!$
+!!$  !Rotatine when old_bug_rotated_weights is on  - we should remove this.
+!!$  if (.not. old_bug_rotated_weights) then
+!!$    do j=grd%jsd, grd%jed; do i=grd%isd, grd%ied
+!!$      if (grd%parity_x(i,j)<0.) then
+!!$        ! This block assumes both parity_x and parity_y are negative
+!!$        ! (i.e. a 180 degree rotation). In general, we should handle
+!!$        ! +/- 90 degree rotations as well but in CM2*-class models
+!!$        ! this is not necessary. -aja
+!!$        dmda=var_on_ocean(i,j,9); var_on_ocean(i,j,9)=var_on_ocean(i,j,1); var_on_ocean(i,j,1)=dmda
+!!$        dmda=var_on_ocean(i,j,8); var_on_ocean(i,j,8)=var_on_ocean(i,j,2); var_on_ocean(i,j,2)=dmda
+!!$        dmda=var_on_ocean(i,j,7); var_on_ocean(i,j,7)=var_on_ocean(i,j,3); var_on_ocean(i,j,3)=dmda
+!!$        dmda=var_on_ocean(i,j,6); var_on_ocean(i,j,6)=var_on_ocean(i,j,4); var_on_ocean(i,j,4)=dmda
+!!$      endif
+!!$    enddo; enddo
+!!$  endif
+!!$
+!!$  !Here we add the contribution of the 9 cells. This is the heart of the routine.
+!!$  do j=grd%jsc, grd%jec; do i=grd%isc, grd%iec
+!!$    dmda=var_on_ocean(i,j,5) &
+!!$         + ( ( (var_on_ocean(i-1,j-1,9)+var_on_ocean(i+1,j+1,1))   &
+!!$         +     (var_on_ocean(i+1,j-1,7)+var_on_ocean(i-1,j+1,3)) ) &
+!!$         +   ( (var_on_ocean(i-1,j  ,6)+var_on_ocean(i+1,j  ,4))   &
+!!$         +     (var_on_ocean(i  ,j-1,8)+var_on_ocean(i  ,j+1,2)) ) )
+!!$    if (grd%area(i,j)>0) dmda=dmda/grd%area(i,j)
+!!$    if (.not. ignore_mask) dmda=dmda*grd%msk(i,j)
+!!$
+!!$    !Make sure that area <=1.0
+!!$    if (field_name=='area') dmda=min(dmda,1.0)
+!!$
+!!$    field(i,j)=dmda
+!!$  enddo; enddo
+!!$
+!!$  if (debug) then
+!!$    grd%tmp(:,:)=0.; grd%tmp(grd%isc:grd%iec,grd%jsc:grd%jec)=field
+!!$    if (field_name=='mass') then
+!!$      call grd_chksum3(grd, grd%mass_on_ocean, 'mass bergs (incr)')
+!!$      call grd_chksum2(grd, grd%tmp, 'mass out (incr)')
+!!$    elseif (field_name=='area') then
+!!$      call grd_chksum3(grd, grd%area_on_ocean, 'area bergs (incr)')
+!!$      call grd_chksum2(grd, grd%tmp, 'area out (incr)')
+!!$    endif
+!!$ endif
+!!$end subroutine sum_up_spread_fields
 
 !> Adds calving (from driver) to the coastal "buckets"
 subroutine accumulate_calving(bergs)

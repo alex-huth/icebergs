@@ -2753,7 +2753,7 @@ subroutine footloose_calving(bergs, time)
     do while(associated(this))
 
       !only non-static, non-footloose-child bergs are eligible for footloose calving:
-      if (.not. (this%static_berg.eq.1 .or. this%fl_k.lt.0)) then
+      if (.not. (this%static_berg.ge.1 .or. this%fl_k.lt.0)) then
 
         T=this%thickness; W=this%width; L=this%length
 
@@ -3084,18 +3084,17 @@ subroutine thermodynamics(bergs)
     do while(associated(this))
       if (debug) call check_position(grd, this, 'thermodynamics (top)')
 
+      if (this%static_berg.gt.1.0) then
+        !this is a tabular berg that has not yet calved from the shelf, so skip it
+        next=>this%next
+        this=>next
+      else
+
       if (bergs%old_interp_flds_order .or. (.not. mts .and. .not. dem .and. this%halo_berg.ge.0.5)) then
         call interp_flds(grd, this%lon, this%lat, this%ine, this%jne, this%xi, this%yj, 0., 0., &
           this%uo, this%vo, this%ui, this%vi, this%ua, this%va, this%ssh_x, &
           this%ssh_y, this%sst, this%sss,this%cn, this%hi)
       end if
-
-      if (this%static_berg.gt.1.0) then
-        !this is a tabular berg that has not yet calved from the shelf, so skip it
-        next=>this%next
-        this=>next
-        cycle
-      endif
 
       SST=this%sst
       SSS=this%sss
@@ -3506,6 +3505,7 @@ subroutine thermodynamics(bergs)
         bergs%nbergs_melted=bergs%nbergs_melted+1
       endif
       this=>next
+    endif ! End if this%static_berg.gt.1.0
     enddo
   enddo ; enddo
 end subroutine thermodynamics
@@ -4290,7 +4290,7 @@ subroutine spread_mass_across_ocean_cells(bergs, berg, i, j, x, y, Mberg, Mbits,
     !Note that for the square elements, the mass has already been reassigned, so fraction_used shoule be equal to 1 aready
     fraction_used= ((yDxL*grd%msk(i-1,j-1)) + (yDxC*grd%msk(i  ,j-1))  +(yDxR*grd%msk(i+1,j-1)) +(yCxL*grd%msk(i-1,j  )) +  (yCxR*grd%msk(i+1,j  ))&
                    +(yUxL*grd%msk(i-1,j+1)) +(yUxC*grd%msk(i  ,j+1))   +(yUxR*grd%msk(i+1,j+1)) + (yCxC**grd%msk(i,j)))
-    if  (berg%static_berg .eq. 1)  fraction_used=1.  !Static icebergs do not share their mass with the boundary
+    if  (berg%static_berg .ge. 1)  fraction_used=1.  !Static icebergs do not share their mass with the boundary
                                                 ! (this allows us to easily  initialize hexagonal icebergs in regular arrangements against boundaries)
   endif
   I_fraction_used=1./fraction_used !Invert this so that the arithmatec reprocudes
@@ -4909,7 +4909,8 @@ subroutine interp_gridded_fields_to_bergs(bergs)
                                           int( 16384.*abs( sin(262144.*grd%ssh(grdi,grdj)) ) ) )
     endif
     do while (associated(berg)) ! loop over all bergs
-      if (berg%halo_berg.lt.0.5) then
+      !skip halo bergs and tabular bergs in the process of calving
+      if (berg%halo_berg.lt.0.5 .and. berg%static_berg<2) then
         if (grd%tidal_drift>0.) then
           call getRandomNumbers(rns, rx)
           rx = 2.*rx - 1.
@@ -5310,9 +5311,9 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   real, dimension(:,:), optional, pointer, intent(in)  :: mass_shelf        !< The ice shelf mass/cell area (kg m-2)
   real, dimension(:,:), optional, pointer, intent(in)  :: area_shelf        !< The area of each grid cell covered by
                                                                             !! the ice shelf [m2]
-  real, dimension(:,:), optional, pointer, intent(out) :: frac_cberg        !< Cell fraction of partially-calved bonded bergs from
+  real, dimension(:,:), optional, pointer :: frac_cberg        !< Cell fraction of partially-calved bonded bergs from
                                                                             !! the ice sheet [nondim]
-  real, dimension(:,:), optional, pointer, intent(out) :: frac_cberg_calved !< Cell fraction of fully-calved bonded bergs from
+  real, dimension(:,:), optional, pointer :: frac_cberg_calved !< Cell fraction of fully-calved bonded bergs from
                                                                             !! the ice sheet [nondim]
   ! Local variables
   type(tabular_calving_state), pointer :: TC
@@ -5385,6 +5386,12 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   endif ;  endif
   if (present(area_berg)) then ;  if (associated(area_berg)) then
     area_berg(:,:)=0.0
+  endif ;  endif
+if (present(frac_cberg)) then ;  if (associated(frac_cberg)) then
+    frac_cberg(:,:)=0.0
+  endif ;  endif
+if (present(frac_cberg_calved)) then ;  if (associated(frac_cberg_calved)) then
+    frac_cberg_calved(:,:)=0.0
   endif ;  endif
 
   ! Manage time
@@ -5459,10 +5466,10 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
     ! Copy ocean and ice velocities. They are already on B-grid u-points.
     grd%uo(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1) = uo(:,:)
     grd%vo(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1) = vo(:,:)
-    call mpp_update_domains(grd%uo, grd%vo, grd%domain, gridtype=BGRID_NE)
+    call mpp_update_domains(grd%uo, grd%vo, grd%domain, gridtype=BGRID_NE, complete=.false.)
     grd%ui(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1) = ui(:,:)
     grd%vi(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1) = vi(:,:)
-    call mpp_update_domains(grd%ui, grd%vi, grd%domain, gridtype=BGRID_NE)
+    call mpp_update_domains(grd%ui, grd%vi, grd%domain, gridtype=BGRID_NE, complete=.true.)
   elseif (vel_stagger == CGRID_NE) then
     ! The u- and v- points will have different offsets with symmetric memory.
     Iu_off = (size(uo,1) - (grd%iec - grd%isc))/2 - grd%isc + 1
@@ -5537,15 +5544,15 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
     call error_mesg('KID, iceberg_run', 'Unrecognized value of stress_stagger!', FATAL)
   endif
 
-  call mpp_update_domains(grd%uo, grd%vo, grd%domain, gridtype=BGRID_NE)
-  call mpp_update_domains(grd%ui, grd%vi, grd%domain, gridtype=BGRID_NE)
+  call mpp_update_domains(grd%uo, grd%vo, grd%domain, gridtype=BGRID_NE, complete=.false.)
+  call mpp_update_domains(grd%ui, grd%vi, grd%domain, gridtype=BGRID_NE, complete=.false.)
 
   if (.not. bergs%tau_is_velocity) then
     call invert_tau_for_du(grd%ua, grd%va) ! Note rough conversion from stress to speed
   endif
  !grd%ua(grd%isc:grd%iec,grd%jsc:grd%jec)=sign(sqrt(abs(tauxa(:,:))/0.01),tauxa(:,:))  ! Note rough conversion from stress to speed
  !grd%va(grd%isc:grd%iec,grd%jsc:grd%jec)=sign(sqrt(abs(tauya(:,:))/0.01),tauya(:,:))  ! Note rough conversion from stress to speed
-  call mpp_update_domains(grd%ua, grd%va, grd%domain, gridtype=BGRID_NE)
+  call mpp_update_domains(grd%ua, grd%va, grd%domain, gridtype=BGRID_NE, complete=.true.)
 
   ! Copy sea surface height and temperature(resides on A grid)
   grd%ssh(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)=ssh(:,:)
@@ -5558,19 +5565,21 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
     enddo ;enddo
   endif
 
-  call mpp_update_domains(grd%ssh, grd%domain)
+  ! Copy sea-surface elevation and temperature
+  call mpp_update_domains(grd%ssh, grd%domain, complete=.false.)
+  call mpp_update_domains(grd%sst, grd%domain, complete=.false.)
+  ! Copy sea-ice concentration and thickness (resides on A grid)
+  call mpp_update_domains(grd%cn, grd%domain, complete=.false.)
+  call mpp_update_domains(grd%hi, grd%domain, complete=.true.)
+
   max_SST = maxval(sst(:,:) * grd%msk(grd%isc:grd%iec,grd%jsc:grd%jec))
   if (max_SST > 120.0) then ! The input sst is in degrees Kelvin, otherwise the water would be boiling.
     grd%sst(grd%isc:grd%iec,grd%jsc:grd%jec) = sst(:,:)-273.15 ! Note convert from Kelvin to Celsius
   else  ! The input sst is already in degrees Celsius.
     grd%sst(grd%isc:grd%iec,grd%jsc:grd%jec) = sst(:,:) ! Note no conversion necessary.
   endif
-  call mpp_update_domains(grd%sst, grd%domain)
-  ! Copy sea-ice concentration and thickness (resides on A grid)
   grd%cn(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)=cn(:,:)
-  call mpp_update_domains(grd%cn, grd%domain)
   grd%hi(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)=hi(:,:)
-  call mpp_update_domains(grd%hi, grd%domain)
 
   ! Adding gridded salinity.
   if (present(sss)) then
@@ -5602,10 +5611,20 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
       !(assuming floatation) as  ice shelf thickness calculated using ice shelf density. However, the
       !respective surface elevations may differ.
       TC%frac_shelf(grd%isc:grd%iec,grd%jsc:grd%jec) = area_shelf(:,:)/grd%area(grd%isc:grd%iec,grd%jsc:grd%jec)
-      TC%h_shelf(grd%isc:grd%iec,grd%jsc:grd%jec)    = mass_shelf(:,:)/(TC%frac_shelf(grd%isc:grd%iec,grd%jsc:grd%jec) * bergs%rho_bergs)
-      call mpp_update_domains(TC%calve_mask, grd%domain)
-      call mpp_update_domains(TC%h_shelf, grd%domain)
-      call mpp_update_domains(TC%frac_shelf, grd%domain)
+
+      !Recall that mass_shelf is in units kg/m2
+      TC%h_shelf(grd%isc:grd%iec,grd%jsc:grd%jec) = mass_shelf(:,:) / (TC%frac_shelf(grd%isc:grd%iec,grd%jsc:grd%jec) * &
+                                                                       bergs%rho_bergs)
+
+      !correct h_shelf so that it is zero (rather than NaN) where there is no ice shelf
+      do i=grd%isc,grd%iec ; do j=grd%jsc,grd%jec
+        if (TC%frac_shelf(i,j)<=0) TC%h_shelf(i,j) = 0.0
+      enddo; enddo
+
+      call mpp_update_domains(TC%calve_mask, grd%domain, complete=.false.)
+      call mpp_update_domains(TC%h_shelf, grd%domain, complete=.false.)
+      call mpp_update_domains(TC%frac_shelf, grd%domain, complete=.true.)
+      print *,'sum(TC%calve_mask)',sum(TC%calve_mask)
       TC%frac_cberg_calved(:,:) = 0.0
       TC%frac_cberg(:,:) = 0.0
     endif
@@ -5639,7 +5658,9 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   ! Calving of tabular bonded bergs
   ! TODO: does this make sense here?
   if (bergs%tabular_calving) then
+    print *,'pt start'
     call process_tabular_calving(bergs)
+    print *,'pt end'
     !return gridded variables associated with tabular calving
     frac_cberg_calved(:,:)=TC%frac_cberg_calved(grd%isc:grd%iec,grd%jsc:grd%jec)
     frac_cberg(:,:)       =TC%frac_cberg(grd%isc:grd%iec,grd%jsc:grd%jec)

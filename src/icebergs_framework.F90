@@ -438,11 +438,16 @@ type :: linked_list
   type(iceberg), pointer :: first=>null() !< Pointer to the beginning of a linked list of bergs
 end type linked_list
 
+!> A wrapper for the iceberg linked list (since an array of pointers is not allowed)
+type :: linked_list_tabular_calving
+  type(iceberg), pointer :: first=>null() !< Pointer to the beginning of a linked list of bergs in the same calving conglomerate
+end type linked_list_tabular_calving
+
 !> Container for all types and memory
 type :: icebergs !; private !Niki: Ask Alistair why this is private. ice_bergs_io cannot compile if this is private!
   type(icebergs_gridded), pointer :: grd !< Container with all gridded data
   type(linked_list), dimension(:,:), allocatable :: list !< Linked list of icebergs
-  type(linked_list), pointer :: new_tabular_list !< Linked list of particles used when calving bonded icebergs from ice shelves
+  type(linked_list_tabular_calving) :: new_tabular_list !< Linked list of particles used when calving bonded icebergs from ice shelves
   type(xyt), pointer :: trajectories=>null() !< A linked list for detached segments of trajectories
   type(bond_xyt), pointer :: bond_trajectories=>null() !< A linked list for detached segments of bond trajectories
   type(tabular_calving_state), pointer :: TC=>null() !< Structure that describes the ice shelf tabular calving state
@@ -642,7 +647,7 @@ type :: icebergs !; private !Niki: Ask Alistair why this is private. ice_bergs_i
   !backwards compatibility
   logical :: old_interp_flds_order=.false. !< Use old order of when to interpolate grid variables to bergs. Will be false if MTS, DEM, or footloose
   logical :: tabular_calving=.false.
-  real :: shelf_to_tabular_hours !< Time (hours) over which ice shelf is transitioned to bonded-particle tabular icebergs  
+  real :: shelf_to_tabular_hours !< Time (hours) over which ice shelf is transitioned to bonded-particle tabular icebergs
 end type icebergs
 
 !> Structure that describes the ice shelf tabualr calving state
@@ -664,7 +669,7 @@ type :: tabular_calving_state
   real, pointer, dimension(:,:) :: &
     berg_list                  !< list of each berg that overlaps the current PE, and the min/max lat/lon of each bergs
   integer :: berg_pe_count = 0 !< Number of bergs that overlap the current PE. Equals the length of berg_list
-  
+
 end type tabular_calving_state
 
 !> Read original restarts. Needs to be module global so can be public to icebergs_mod.
@@ -1593,12 +1598,12 @@ endif
 
   if (present(tabular_calving)) then
     bergs%tabular_calving=tabular_calving
-    if (bergs%tabular_calving) then
-      if (.not. (bergs%mts .and. bergs%dem .and. (.not. bergs%old_interp_flds_order))) then
-        call error_mesg('KID, ice_bergs_framework_init', &
-          'tabular calving requires (mts .and. dem .and. (.not. old_interp_flds_order))!', FATAL)
-      endif
-    endif
+  !   if (bergs%tabular_calving) then
+  !     if (.not. (bergs%mts .and. bergs%dem .and. (.not. bergs%old_interp_flds_order))) then
+  !       call error_mesg('KID, ice_bergs_framework_init', &
+  !         'tabular calving requires (mts .and. dem .and. (.not. old_interp_flds_order))!', FATAL)
+  !     endif
+  !   endif
   else
     bergs%tabular_calving=.false.
   endif
@@ -2283,7 +2288,6 @@ logical :: halo_debugging
     !write(stderrunit,*)  'sending east', this%id, this%ine, this%jne, mpp_pe()
       if (this%static_berg<2) then
         this=>this%next
-        cycle
       else
         kick_the_bucket=>this
         this=>this%next
@@ -2302,7 +2306,6 @@ logical :: halo_debugging
     do while (associated(this))
       if (this%static_berg<2) then
         this=>this%next
-        cycle
       else
         kick_the_bucket=>this
         this=>this%next
@@ -2377,7 +2380,6 @@ logical :: halo_debugging
     do while (associated(this))
       if (this%static_berg<2) then
         this=>this%next
-        cycle
       else
         kick_the_bucket=>this
         this=>this%next
@@ -2396,7 +2398,6 @@ logical :: halo_debugging
     do while (associated(this))
       if (this%static_berg<2) then
         this=>this%next
-        cycle
       else
         kick_the_bucket=>this
         this=>this%next
@@ -7948,7 +7949,7 @@ subroutine sum_up_spread_fields(bergs, field, field_name, ignore_mask_in)
   ! Arguments
   type(icebergs), pointer :: bergs !< Container for all types and memory
   real, dimension(bergs%grd%isc:bergs%grd%iec,bergs%grd%jsc:bergs%grd%jec), intent(out) :: field !< Gridded field
-  character(len=4), intent(in) :: field_name !< Name of field to grid
+  character(len=*), intent(in) :: field_name !< Name of field to grid
   logical, intent(in), optional :: ignore_mask_in !< Do not mask where grid area or mask = 0. Needed for frac_cberg_calved and frac_cberg variables.
   ! Local variables
   integer :: i, j
@@ -7972,13 +7973,13 @@ subroutine sum_up_spread_fields(bergs, field, field_name, ignore_mask_in)
   field(:,:)=0.
 
   !Deciding which varibale to spread across cells across grid cells
-  if (field_name=='mass') var_on_ocean(:,:,:)=grd%mass_on_ocean(:,:,:)
-  if (field_name=='area') var_on_ocean(:,:,:)=grd%area_on_ocean(:,:,:)
-  if (field_name=='Uvel') var_on_ocean(:,:,:)=grd%Uvel_on_ocean(:,:,:)
-  if (field_name=='Vvel') var_on_ocean(:,:,:)=grd%Vvel_on_ocean(:,:,:)
-  if (field_name=='frac_cberg_calved') var_on_ocean(:,:,:)=grd%frac_cberg_calved(:,:,:)
-  if (field_name=='frac_cberg')        var_on_ocean(:,:,:)=grd%frac_cberg(:,:,:)
-  if (field_name=='pf_area')           var_on_ocean(:,:,:)=grd%pf_area(:,:,:)
+  if (trim(field_name)=='mass') var_on_ocean(:,:,:)=grd%mass_on_ocean(:,:,:)
+  if (trim(field_name)=='area') var_on_ocean(:,:,:)=grd%area_on_ocean(:,:,:)
+  if (trim(field_name)=='Uvel') var_on_ocean(:,:,:)=grd%Uvel_on_ocean(:,:,:)
+  if (trim(field_name)=='Vvel') var_on_ocean(:,:,:)=grd%Vvel_on_ocean(:,:,:)
+  if (trim(field_name)=='frac_cberg_calved') var_on_ocean(:,:,:)=grd%frac_cberg_calved(:,:,:)
+  if (trim(field_name)=='frac_cberg')        var_on_ocean(:,:,:)=grd%frac_cberg(:,:,:)
+  if (trim(field_name)=='pf_area')           var_on_ocean(:,:,:)=grd%pf_area(:,:,:)
 
   !This line has been removed, for that routine can be used for other fields
   !if (.not. bergs%add_weight_to_ocean) return
@@ -8013,17 +8014,17 @@ subroutine sum_up_spread_fields(bergs, field, field_name, ignore_mask_in)
     if (.not. ignore_mask) dmda=dmda*grd%msk(i,j)
 
     !Make sure that area <=1.0
-    if (field_name=='area') dmda=min(dmda,1.0)
+    if (trim(field_name)=='area') dmda=min(dmda,1.0)
 
     field(i,j)=dmda
   enddo; enddo
 
   if (debug) then
     grd%tmp(:,:)=0.; grd%tmp(grd%isc:grd%iec,grd%jsc:grd%jec)=field
-    if (field_name=='mass') then
+    if (trim(field_name)=='mass') then
       call grd_chksum3(grd, grd%mass_on_ocean, 'mass bergs (incr)')
       call grd_chksum2(grd, grd%tmp, 'mass out (incr)')
-    elseif (field_name=='area') then
+    elseif (trim(field_name)=='area') then
       call grd_chksum3(grd, grd%area_on_ocean, 'area bergs (incr)')
       call grd_chksum2(grd, grd%tmp, 'area out (incr)')
     endif
@@ -8589,61 +8590,61 @@ subroutine Hexagon_into_quadrants_using_triangles(x0, y0, H, theta, Area_hex ,Ar
 
        if (tabular_calving .and. berg%static_berg>=0) then
          berg=>berg%next
-         cycle
-       endif
+       else
 
-       lon1=berg%lon; lat1=berg%lat
-       !call rotpos_to_tang(lon1,lat1,x1,y1)  !Is this correct? Shouldn't it only be on tangent plane?
+         lon1=berg%lon; lat1=berg%lat
+         !call rotpos_to_tang(lon1,lat1,x1,y1)  !Is this correct? Shouldn't it only be on tangent plane?
 
-       ! do grdj_inner = grd%jsc,grd%jec ; do grdi_inner = grd%isc,grd%iec  !This line uses n^2 steps
-       do grdj_inner = grd%jsd,grd%jed ; do grdi_inner = grd%isd,grd%ied !Uses n^2 steps. Change to data domain-Alex
-         !     do grdj_inner = berg%jne-1,berg%jne+1 ; do grdi_inner = berg%ine-1,berg%ine+1   !Only looping through adjacent cells.
-         other_berg=>bergs%list(grdi_inner,grdj_inner)%first
-         do while (associated(other_berg)) ! loop over all other bergs
+         ! do grdj_inner = grd%jsc,grd%jec ; do grdi_inner = grd%isc,grd%iec  !This line uses n^2 steps
+         do grdj_inner = grd%jsd,grd%jed ; do grdi_inner = grd%isd,grd%ied !Uses n^2 steps. Change to data domain-Alex
+           !     do grdj_inner = berg%jne-1,berg%jne+1 ; do grdi_inner = berg%ine-1,berg%ine+1   !Only looping through adjacent cells.
+           other_berg=>bergs%list(grdi_inner,grdj_inner)%first
+           do while (associated(other_berg)) ! loop over all other bergs
 
-           if (tabular_calving .and. other_berg%static_berg>=0) then
-             other_berg=>other_berg%next
-             cycle
-           endif
+             if (tabular_calving .and. other_berg%static_berg>=0) then
+               other_berg=>other_berg%next
+             else
 
-           if (berg%id .ne. other_berg%id) then
-             !first, make sure the bergs are not bonded already
-             already_bonded=.false.
-             current_bond=>berg%first_bond
-             do while (associated(current_bond))
-               if (current_bond%other_id .ne. other_berg%id) then
-                 current_bond=>current_bond%next_bond
-               else
-                 current_bond=>null()
-                 already_bonded=.true.
+               if (berg%id .ne. other_berg%id) then
+                 !first, make sure the bergs are not bonded already
+                 already_bonded=.false.
+                 current_bond=>berg%first_bond
+                 do while (associated(current_bond))
+                   if (current_bond%other_id .ne. other_berg%id) then
+                     current_bond=>current_bond%next_bond
+                   else
+                     current_bond=>null()
+                     already_bonded=.true.
+                   endif
+                 enddo
+
+                 if (.not. already_bonded) then
+                   lon2=other_berg%lon; lat2=other_berg%lat
+                   dlon=lon1-lon2;      dlat=lat1-lat2
+                   lat_ref=0.5*(lat1+lat2)
+                   call convert_from_grid_to_meters(lat_ref,grd%grid_is_latlon,dx_dlon,dy_dlat)
+                   r_dist_x=dlon*dx_dlon
+                   r_dist_y=dlat*dy_dlat
+                   r_dist=sqrt( (r_dist_x**2) + (r_dist_y**2) )
+
+                   if (bergs%manually_initialize_bonds_from_radii) then
+                     radius1=sqrt(berg%length*berg%width*rdenom)
+                     radius2=sqrt(other_berg%length*other_berg%width*rdenom)
+                     !radius=sqrt(min(berg%length*berg%width,other_berg%length*other_berg%width))
+                     if (r_dist.lt.1.25*(radius1+radius2)) &
+                       call form_a_bond(berg, other_berg%id, other_berg%ine, other_berg%jne, other_berg)
+                   elseif (r_dist.lt.bergs%length_for_manually_initialize_bonds) then
+                     ! If the bergs are closer than bergs%length_for_manually_initialize_bonds, then form a bond -Alex
+                     call form_a_bond(berg, other_berg%id, other_berg%ine, other_berg%jne, other_berg)
+                   endif
+                 endif
                endif
-             enddo
-
-             if (.not. already_bonded) then
-               lon2=other_berg%lon; lat2=other_berg%lat
-               dlon=lon1-lon2;      dlat=lat1-lat2
-               lat_ref=0.5*(lat1+lat2)
-               call convert_from_grid_to_meters(lat_ref,grd%grid_is_latlon,dx_dlon,dy_dlat)
-               r_dist_x=dlon*dx_dlon
-               r_dist_y=dlat*dy_dlat
-               r_dist=sqrt( (r_dist_x**2) + (r_dist_y**2) )
-
-               if (bergs%manually_initialize_bonds_from_radii) then
-                 radius1=sqrt(berg%length*berg%width*rdenom)
-                 radius2=sqrt(other_berg%length*other_berg%width*rdenom)
-                 !radius=sqrt(min(berg%length*berg%width,other_berg%length*other_berg%width))
-                 if (r_dist.lt.1.25*(radius1+radius2)) &
-                   call form_a_bond(berg, other_berg%id, other_berg%ine, other_berg%jne, other_berg)
-               elseif (r_dist.lt.bergs%length_for_manually_initialize_bonds) then
-                 ! If the bergs are closer than bergs%length_for_manually_initialize_bonds, then form a bond -Alex
-                 call form_a_bond(berg, other_berg%id, other_berg%ine, other_berg%jne, other_berg)
-               endif
-             endif
-           endif
-           other_berg=>other_berg%next
-         enddo  ! End of looping through all other bergs in the inner list
-       enddo; enddo;  !End of inner loop
-       berg=>berg%next
+               other_berg=>other_berg%next
+             endif ! End if (tabular_calving .and. other_berg%static_berg>=0)
+           enddo  ! End of looping through all other bergs in the inner list
+         enddo; enddo;  !End of inner loop
+         berg=>berg%next
+       endif !End if (tabular_calving .and. berg%static_berg>=0)
      enddo ! End of looping through all bergs in the outer list
    enddo; enddo; !End of outer loop.
 
@@ -8684,5 +8685,5 @@ subroutine Hexagon_into_quadrants_using_triangles(x0, y0, H, theta, Area_hex ,Ar
    endif
 
  end subroutine convert_from_meters_to_grid
- 
+
 end module

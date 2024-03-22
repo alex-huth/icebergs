@@ -1,7 +1,7 @@
 !> Routines for calving from tabular ice shelves
 module ice_shelf_tabular_calving
 
-  use constants_mod, only: pi, omega, HLF  
+  use constants_mod, only: pi, omega, HLF
   use mpp_mod, only : mpp_send, mpp_recv, mpp_max, mpp_npes, mpp_pe, mpp_root_pe, NULL_PE
   use mpp_mod, only: COMM_TAG_1, COMM_TAG_2, COMM_TAG_3, COMM_TAG_4
   use mpp_mod, only: COMM_TAG_5, COMM_TAG_6, COMM_TAG_7, COMM_TAG_8
@@ -70,77 +70,65 @@ module ice_shelf_tabular_calving
     TC => bergs%TC
     if (associated(TC%berg_list)) deallocate(TC%berg_list)
 
-    !First, update the tabular calving mask
-    ! call update_tabular_calving_mask(G, CS, TC, Time)
-
-    ! max_TC_mask = maxval(TC%calve_mask)
-    ! call mpp_max(max_TC_mask)
-    ! if (max_TC_mask<=0) then !no calving
-    !   if (allocated(TC%berg_list)) deallocate(TC%berg_list)
-    !   return
-    ! endif
-
-    !We want to initialize (calve)  bonded-particle tabular bergs that cover the "berg cells" defined
-    !where mask>0. There may be multiple tabular bergs to calve in the domain,
-    !which may overlap multiple cells and PEs. The approach is to create a field of unique IDs
-    !that are each associated with a different tabular berg. This ID is the same on
-    !all PEs that the corresponding berg may overlap. Then, the max/min x and y coordinates of
-    !each berg are passed between the PEs that the berg overlaps. Next, a rectangular array of
-    !bonded particles in initialized that spans these max/min coordinates, and which is defined
-    !identically and redundantly for each PE that the berg overlaps. On each PE, excess particles which
-    !do not overlap any berg cell associated with the current berg are then trimmed off. Initialization
-    !of the fully-bonded berg is completed in the iceberg module, where the bonded particles of the
-    !berg are connected across PE boundaries to produce the full iceberg.
-
-    !TODO: Note that the code here assumes that any two neighboring cells, each with mask>0, must
-    !be part of the same berg. If we want to calve adjacent bergs, we can calve one on the first timestep
-    !and the other on the next timestep after the first is fully initialized. Or if using damage, calve both
-    !as one berg, interp the damage to the new berg, and break bonds where there is a rift.
-
-    !Alternatively, if we want to allow multiple, adjacent bergs, to calve on a single
-    !time step, then we could assign different (positive, non-zero) mask values to differentiate the
-    !bergs. After the single berg is calved, we can break bonds where the mask is different (we would
-    !not break over halo cells unless the mask indicated, though the mask values may differ on other PEs).
-    !In other words, we would initialize the multiple and adjacent bergs as a single berg, which is
-    !which is subsequently broken up into the multiple adjecent bergs. This approach guarantees that
-    !the adjacent bergs are initialized without inter-berg particle overlap/separation.
-
-    !Alternatively, we could just have a "background" set of bonded particles that are
-    !kept constant over time, and initialize bergs by copying over a subset of these bonded
-    !particles as needed to represent the new bergs. However, this approach is not
-    !as versatile for controlling particle size. Also, it is not simple to guarantee that
-    !the particles extents of the (meridionally-aligned) first and last column would align (zonally).
-
-    !comment out halo-filling of calve_mask for now. If there are multiple, adjacent calving events, we
-    !may define them with different calve_mask>0 on each PE, so that the value of calve_mask may
-    !differ between PEs for the same berg. However, we make sure each PE calculates its own calve_mask
-    !in its own halo cells, and then make a copy of the resulting calve_mask. Then mpp_update_domains the original
-    !calve_mask and compare to the copy to backcalculate a consistent value for calve_mask for each berg
-    !that can be shared between each PE later.
-    !call mpp_update_domains(TC%calve_mask, G%domain)
-
-    !TODO: Icebergs may overlap with each other or the ice shelf, so make sure mass scaling is done appropriately
-    !on new iceberg particles to avoid issues with pressure on the ocean...Also should strongly force bergs away
-    !from ice shelves. Perhaps need to ensure that the total pressure on the ocean does not exceed that of a combination
-    !of the iceberg(s) and ice shelf mass should it fully-cover the cell (with adjustments for mass-weighting and the
-    !percentage of the total unadjusted mass that the pressure of each component exerts on the cell...). Mass will not
-    !be conserved at that instant, but ultimately is over time.
-
+    !We want to initialize (calve) bonded-particle tabular bergs that cover the "berg cells" defined where
+    !mask>0. There may be multiple tabular bergs to calve in the domain, which may overlap multiple cells and
+    !PEs. The approach is to create a field of unique IDs that are each associated with a different tabular
+    !berg. This ID is the same on all PEs that the corresponding berg may overlap. Then, the max/min x and y
+    !coordinates of each berg are passed between the PEs that the berg overlaps. Next, a rectangular array of
+    !bonded particles in initialized that spans these max/min coordinates, and which is defined identically
+    !and redundantly for each PE that the berg overlaps. On each PE, excess particles which do not overlap any
+    !berg cell associated with the current berg are then trimmed off. Initialization of the fully-bonded berg
+    !is completed in the iceberg module, where the bonded particles of the berg are connected across PE
+    !boundaries to produce the full iceberg.
+    print *,'start processing bergs'
     !1) Generate a unique label (TC%c_id) for each berg on the computational domain of a PE
     call initialize_tabular_calving_labels_1PE(bergs%grd, TC%calve_mask, TC%c_id)
-
+    print *,'maxval(TC%c_id) 1',maxval(TC%c_id)
     !2) fill halos with the unique berg labels. Find connected berg cells, and update them
     !   with the lowest berg label (TC%c_id) of all of the connected berg cells. Repeat until no changes.
     call update_tabular_calving_labels_over_pes(bergs%grd, TC%calve_mask, TC%c_id)
-
+    print *,'maxval(TC%c_id) 2',maxval(TC%c_id)
     !3) Make a list of each of the i bergs on the local PE domain (TC%berg_list(i,1)), their
     !   min (TC%berg_list(i,2)) max longitude (TC%berg_list(i,3)), and their
     !   min (TC%berg_list(i,4)) max latitude (TC%berg_list(i,5))
     call tabular_berg_info(bergs%grd, TC)
-
-    !4) Initialize iKID icebergs over these bounds, and remove excess particles. Call this from SIS2?
+    print *,'berg_pe_count',TC%berg_pe_count
+    !4) Initialize iKID icebergs over these bounds, and remove excess particles.
     call ice_shelf_to_bonded_bergs(bergs, TC)
+    print *,'done processing bergs'
+    !TODO: Note that the code here assumes that any two neighboring cells, each with mask>0, must be part of
+    !the same berg. If we want to calve adjacent bergs, we can calve one on the first timestep and the other
+    !on the next timestep after the first is fully initialized. Or if using damage, calve both as one berg,
+    !interp the damage to the new berg, and break bonds where there is a rift.
 
+    !Alternatively, if we want to allow multiple, adjacent bergs, to calve on a single time step, then we
+    !could assign different (positive, non-zero) mask values to differentiate the bergs. After the single berg
+    !is calved, we can break bonds where the mask is different (we would not break over halo cells unless the
+    !mask indicated, though the mask values may differ on other PEs).  In other words, we would initialize the
+    !multiple and adjacent bergs as a single berg, which is which is subsequently broken up into the multiple
+    !adjecent bergs. This approach guarantees that the adjacent bergs are initialized without inter-berg
+    !particle overlap/separation.
+
+    !Alternatively, we could just have a "background" set of bonded particles that are kept constant over
+    !time, and initialize bergs by copying over a subset of these bonded particles as needed to represent the
+    !new bergs. However, this approach is not as versatile for controlling particle size. Also, it is not
+    !simple to guarantee that the particles extents of the (meridionally-aligned) first and last column would
+    !align (zonally).
+
+    !comment out halo-filling of calve_mask for now. If there are multiple, adjacent calving events, we may
+    !define them with different calve_mask>0 on each PE, so that the value of calve_mask may differ between
+    !PEs for the same berg. However, we make sure each PE calculates its own calve_mask in its own halo cells,
+    !and then make a copy of the resulting calve_mask. Then mpp_update_domains the original calve_mask and
+    !compare to the copy to backcalculate a consistent value for calve_mask for each berg that can be shared
+    !between each PE later.  call mpp_update_domains(TC%calve_mask, G%domain)
+
+    !TODO: Icebergs may overlap with each other or the ice shelf, so make sure mass scaling is done
+    !appropriately on new iceberg particles to avoid issues with pressure on the ocean...Also should strongly
+    !force bergs away from ice shelves. Perhaps need to ensure that the total pressure on the ocean does not
+    !exceed that of a combination of the iceberg(s) and ice shelf mass should it fully-cover the cell (with
+    !adjustments for mass-weighting and the percentage of the total unadjusted mass that the pressure of each
+    !component exerts on the cell...). Mass will not be conserved at that instant, but ultimately is over
+    !time.
   end subroutine process_tabular_calving
 
 
@@ -154,8 +142,9 @@ module ice_shelf_tabular_calving
                                                 !! of a calving tabular berg
     integer :: i, j
 
+    c_id(:,:)=0
     do j=grd%jsc,grd%jec; do i=grd%isc,grd%iec
-      if (mask(i,j) .gt. 0 .and. (c_id(i,j) .eq. 0)) then
+      if ((mask(i,j) > 0) .and. (c_id(i,j) == 0)) then
         c_id(i,j) = ij_component_of_id(grd,i,j)
         call label_tabular_bergs(grd, i, j, mask, c_id)
       endif
@@ -180,9 +169,9 @@ module ice_shelf_tabular_calving
 
     do j=js,je; do i=is,ie
 
-      if ((mask(i,j) > 0) .and. (c_id(i,j) .ne. c_id(ic,jc))) then
+      if ((mask(i,j) > 0) .and. (c_id(i,j) /= c_id(ic,jc))) then
 
-        c_id(i,j) = min(c_id(ic,jc),c_id(i,j))
+        c_id(i,j) = max(c_id(ic,jc),c_id(i,j))
         call label_tabular_bergs(grd, i, j, mask, c_id)
       endif
     enddo; enddo
@@ -212,9 +201,9 @@ module ice_shelf_tabular_calving
         endif
 
         do j=grd%jsc,grd%jec
-          if (c_id(i,j) .ne. 0) then
-            if ((c_id(i2,j) .ne. 0) .and. (c_id(i2,j) .ne. c_id(i,j))) then
-              c_id(i,j) = min(c_id(i,j), c_id(i2,j))
+          if (c_id(i,j) /= 0) then
+            if ((c_id(i2,j) /= 0) .and. (c_id(i2,j) /= c_id(i,j))) then
+              c_id(i,j) = max(c_id(i,j), c_id(i2,j))
               change=1
               call label_tabular_bergs(grd, i, j, mask, c_id)
             endif
@@ -228,9 +217,9 @@ module ice_shelf_tabular_calving
         endif
 
         do i=grd%isc,grd%iec
-          if (c_id(i,j) .ne. 0) then
-            if ((c_id(i,j2) .ne. 0) .and. (c_id(i,j2) .ne. c_id(i,j))) then
-              c_id(i,j) = min(c_id(i,j), c_id(i,j2))
+          if (c_id(i,j) /= 0) then
+            if ((c_id(i,j2) /= 0) .and. (c_id(i,j2) /= c_id(i,j))) then
+              c_id(i,j) = max(c_id(i,j), c_id(i,j2))
               change=1
               call label_tabular_bergs(grd, i, j, mask, c_id)
             endif
@@ -259,14 +248,16 @@ module ice_shelf_tabular_calving
     n=(grd%iec-grd%isc) * (grd%jec-grd%jsc)
     allocate(tmp(n))
     tmp(:) = 0.
-    min_val = minval(c_id(grd%isc:grd%iec,grd%jsc:grd%jec))-1
+    min_val = minval(c_id(grd%isc:grd%iec,grd%jsc:grd%jec))
     max_val = maxval(c_id(grd%isc:grd%iec,grd%jsc:grd%jec))
     bcount = 0
-    do while (min_val<max_val)
-      bcount = bcount+1
-      min_val = minval(c_id(grd%isc:grd%iec,grd%jsc:grd%jec), mask=c_id(grd%isc:grd%iec,grd%jsc:grd%jec)>min_val)
-      tmp(bcount) = real(min_val)
-    enddo
+    if (max_val>0) then
+      do while (min_val<max_val)
+        bcount = bcount+1
+        min_val = minval(c_id(grd%isc:grd%iec,grd%jsc:grd%jec), mask=c_id(grd%isc:grd%iec,grd%jsc:grd%jec)>min_val)
+        tmp(bcount) = real(min_val)
+      enddo
+    endif
 
     if (associated(TC%berg_list)) deallocate(TC%berg_list)
 
@@ -339,7 +330,7 @@ module ice_shelf_tabular_calving
 
     changes = 1
     localchanges = 1
-    do while (changes.ne.0)
+    do while (changes/=0)
 
       changes=0
 
@@ -479,7 +470,7 @@ module ice_shelf_tabular_calving
     integer :: bberg_data !< count of berg data being received in the buffer from another PE
     real, pointer :: pebl(:,:) !< array of bergs on the current PE and their lat/lon bounds
     real :: buffer(bberg_data) !< the buffer of bergs being received on the current PE
-    integer :: changes !< tracks number of bound changes. Calling loop ends when changes = 0. 
+    integer :: changes !< tracks number of bound changes. Calling loop ends when changes = 0.
     real :: buffer2(bberg_data/5,5)
     integer :: m, n
 
@@ -517,7 +508,7 @@ module ice_shelf_tabular_calving
     real :: minlon, maxlon, minlat, maxlat
     real :: minlon0, maxlon0, minlat0, maxlat0
     real :: minx, miny, cos_lat_ref, dlonscale
-    integer :: stderrunit, i, k, nbonds
+    integer :: stderrunit, i, k, nbonds, berg_count
     logical :: check_bond_quality
 
     !The number of tabular icebergs to initialize on the current PE
@@ -587,6 +578,9 @@ module ice_shelf_tabular_calving
         minlon=TC%berg_list(i,2); maxlon=min(TC%berg_list(i,3),maxlon0)
         minlat=TC%berg_list(i,4); maxlat=min(TC%berg_list(i,5),maxlat0)
 
+        ! print *,'lon bounds',minlon,maxlon
+        ! print *,'lat bounds',minlat,maxlat
+
         !snap the lat/lon bounds to a constant cartesian grid with spacing equal to the
         !constant diameter of bonded bergs from ice shelves
         !This could be helpful to prevent overlapping when multiple, adjacent bergs are in the process of calving.
@@ -642,7 +636,7 @@ module ice_shelf_tabular_calving
 
         lat = minlat
         k=0
-
+        berg_count=0
         do while (lat<=maxlat)
           k=k+1
 
@@ -658,14 +652,11 @@ module ice_shelf_tabular_calving
 
             do while (lon<maxlon)
               if (lon>minlon0) then
-
-                !Add particle. If particle is definitely fully-filled with ice (i.e. it does not overlap any
-                !partially-filled cells), then interpolate thickness to the particle. If the particle is partially-filled,
-                !then save its overlapping area with neighboring cells. Its thickness and scaling will be determined
+                berg_count=berg_count+1
+                !Save the overlapping area of each particle with neighboring cells. Their thickness and scaling will be determined
                 !below in new_tabular_bergs_thickness_and_pressure.
                 call begin_calving_tabular_iceberg_from_shelf(bergs, lon, lat, &
                                                               TC%calve_mask, TC%frac_shelf, 0.5*diameter)
-
               endif
               lon=lon+dlon
             enddo
@@ -673,8 +664,9 @@ module ice_shelf_tabular_calving
           lat=lat+dlat
         enddo
       enddo
-    endif
+    endif !if bcount>0
 
+    print *,'berg_count',berg_count
     !2) Initialize bonds and halo bergs. Eliminate bergs with zero thickness and which are 2 cells away from
     !the ice front. The particles within 2 cells of the front are kept for now, even if they currently have zero
     !thickness, because the pressure on the ocean is slowly transitioned from ice shelf to berg over some period of time;
@@ -685,6 +677,10 @@ module ice_shelf_tabular_calving
     call update_halo_calved_tabular_icebergs(bergs)
     !bond just the new tabular iceberg particles, if they are within 1.25*diameter of each other
     call initialize_iceberg_bonds(bergs, tabular_calving_only=.true.)
+
+    check_bond_quality=.True.
+    call count_bonds(bergs, nbonds,check_bond_quality)
+    call assign_n_bonds(bergs)
 
     !This can be done with the rest of the bergs?
     !call transfer_mts_bergs(bergs)
@@ -710,44 +706,37 @@ module ice_shelf_tabular_calving
     !modified as frac_shelf-frac_cberg, where frac_cberg will be 0 at the start of the transition time between
     !ice shelf and iceberg, and 1 at the end.
 
-    !TODO: ice shelf calving mask could also be fractional over cells that have both calve and no-calve MPs.
+    !TODO: ice shelf calving mask could also be fractional over cells that have both calve and no-calve MPs. Could you
+    !      treat these cells similarly to the ice front?
 
     !Calving mask must stay constant until calving is over, which can be detected when a cell obtains a value of
     !frac_cberg_calved>0. Then, eliminate the calving mask there. Probably easiest to allow multiple calving
     !masks on the same PE, but not if they are touching. Simply allow the first calving event to finish before
     !starting the second...
 
-    call new_tabular_bergs_thickness_and_pressure(bergs, TC%h_shelf, TC%frac_shelf, TC%frac_cberg_calved, TC%frac_cberg)
-
-    !needed?
-    check_bond_quality=.True.
-    call count_bonds(bergs, nbonds,check_bond_quality)
-    call assign_n_bonds(bergs)
-
+    call new_tabular_bergs_thickness_and_pressure(bergs)
   end subroutine ice_shelf_to_bonded_bergs
 
   !> Calculates thickness new bonded-particle calved from an ice shelf. Also calculates pressure scaling for particles
   !! and ice shelf as the calving part of the ice shelf transitions to bonded bergs over time.
-  subroutine new_tabular_bergs_thickness_and_pressure(bergs, h_shelf, frac_shelf, frac_cberg_calved, frac_cberg)
+  subroutine new_tabular_bergs_thickness_and_pressure(bergs)
     type(icebergs), pointer :: bergs !< Container for all types and memory
-    real, dimension(:,:), intent(in) :: h_shelf !< The ice shelf thickness field (m)
-    real, dimension(:,:), intent(in) :: frac_shelf !< The fraction of a grid cell covered by
-                                                     !! the ice shelf [nondim].
-    real, dimension(:,:), intent(out) :: frac_cberg_calved !< Cell fraction of fully-calved bonded bergs from
-                                                           !! the ice sheet [nondim]
-    real, dimension(:,:), intent(out) :: frac_cberg !< Cell fraction of partially-calved bonded bergs from
-                                                    !! the ice sheet [nondim]
     ! Local variables
+    type(tabular_calving_state), pointer :: TC !< A pointer to the tabular calving structure
     type(icebergs_gridded), pointer :: grd
     type(iceberg), pointer :: berg, other_berg
     type(bond) , pointer :: current_bond
+    real, dimension(:,:), pointer :: h_shelf ! The ice shelf thickness field (m)
+    real, dimension(:,:), pointer :: frac_shelf ! The fraction of a grid cell covered by the ice shelf [nondim]
+    real, dimension(:,:), pointer :: frac_cberg_calved ! Cell fraction of fully-calved bonded bergs from the ice sheet [nondim]
+    real, dimension(:,:), pointer :: frac_cberg ! Cell fraction of partially-calved bonded bergs from the ice sheet [nondim]
     integer :: grdi, grdj, c1
-    integer :: count, max_count, i,j
-    real :: berg_area, resid_area
+    integer :: count, max_count
+    real :: resid_area
     real, allocatable :: pf_area(:,:,:)
-    real, pointer :: yUxL, yUxC, yUxR
-    real, pointer :: yCxL, yCxC, yCxR
-    real, pointer :: yDxL, yDxC, yDxR
+    real :: yUxL, yUxC, yUxR
+    real :: yCxL, yCxC, yCxR
+    real :: yDxL, yDxC, yDxR
     real :: T_scale
 
     !A newly-calving iKID conglomerate may have both edge particles (i.e. with empty bond pairs) and
@@ -756,10 +745,15 @@ module ice_shelf_tabular_calving
     !(defined as having berg%mass_scaling<1) during the interpolation of gridded ice shelf fields to the
     !particles. However, only edge particles should be partially-filled, so here, some mass is transferred
     !from the edge particles to the interior particles to fill the interior particles completely.
-
     grd=>bergs%grd
     grd%frac_cberg_calved(:,:,:)=0.
     grd%frac_cberg(:,:,:)=0.
+
+    TC=>bergs%TC
+    h_shelf=>TC%h_shelf
+    frac_shelf=>TC%frac_shelf
+    frac_cberg_calved=>TC%frac_cberg_calved
+    frac_cberg=>TC%frac_cberg
 
     !now that all bergs are initialized and bonded, all static_berg statuses should be positive
     do grdj = grd%jsd,grd%jed ; do grdi = grd%isd,grd%ied
@@ -774,9 +768,9 @@ module ice_shelf_tabular_calving
     !   each initially partially-full particle is. Partial fill particles closer to a full particle will preferentially
     !   be filled with ice shelf mass first, so that they can actually end up converting to full particles and only
     !   the outermost edge of a conglomerate will contain partially-full particles.
-
     count=1 !number of bonds a partially-full particle is away from a full particle
     max_count=0
+    T_scale=0
 
     do grdj = grd%jsd,grd%jed ; do grdi = grd%isd,grd%ied ! only process conglomerates overlapping the comp domain
       berg=>bergs%list(grdi,grdj)%first
@@ -785,22 +779,20 @@ module ice_shelf_tabular_calving
         !Processed bergs have their IDs set negative
         if (berg%static_berg==2 .and. berg%id>0) then
           bergs%new_tabular_list%first=>null()
-          bergs%new_tabular_list=>null()
           !returns a list of partially-full particles that are directly connected to full particles (i.e. count==1)
           berg%id=-berg%id
-          call make_list_of_bonded_to_full(bergs,berg,bergs%new_tabular_list%first)
+          call make_list_of_bonded_to_full(berg,bergs%new_tabular_list%first)
           if (associated(bergs%new_tabular_list%first)) then
             !For partially-full particles that are not directly bonded to a full particle
             !(i.e. count>1), determine how many bonds they are away from a full particle
             count=2
-            call assign_bonds_from_full(bergs,berg,bergs%new_tabular_list%first,count)
+            call assign_bonds_from_full(bergs%new_tabular_list%first,count)
             max_count=max(count-1,max_count)
           endif
         endif
         berg=>berg%next
       enddo
     enddo; enddo
-
     !Also process conglomerates without any initially "full" particles. In this case, any partial-fill
     !particle that overlaps a full ice shelf cell will be given count==1 (as if it is one bond away from an
     !initially filled particle.
@@ -809,15 +801,14 @@ module ice_shelf_tabular_calving
       do while (associated(berg)) ! loop over all bergs
         if ((berg%static_berg==2.5) .and. berg%id>0) then
           bergs%new_tabular_list%first=>null()
-          bergs%new_tabular_list=>null()
           !this berg is partially-filled and overlaps a full ice shelf cell,
           !but does not eventually connect to a full particle
           !We can treat it as if it is bonded to a full particle
           berg%id=-berg%id
           count=2 !to make sure that max_count will be >=1
-          call make_list_of_bonded_to_full(bergs,berg,bergs%new_tabular_list%first)
+          call make_list_of_bonded_to_full2(berg,bergs%new_tabular_list%first)
           if (associated(bergs%new_tabular_list%first)) then
-            call assign_bonds_from_full(bergs,berg,bergs%new_tabular_list%first,count)
+            call assign_bonds_from_full(bergs%new_tabular_list%first,count)
             max_count=max(count-1,max_count)
           endif
         endif
@@ -838,14 +829,13 @@ module ice_shelf_tabular_calving
         enddo
       enddo; enddo
     endif
-
     if (max_count>0) then
 
       !2) use the gridded field "pf_area" field to calculate the total area of
       !   (initially) partially-full particles in each cell that are a
       !   certain "count" of bounds away from a full particle
-      allocate(pf_area(grd%isd:grd%ied,grd%jsd:grd%jed,max_count), source=0.0)
 
+      allocate(pf_area(grd%isd:grd%ied,grd%jsd:grd%jed,max_count), source=0.0)
       do count=1,max_count
         grd%pf_area(:,:,:)=0.
         do grdj = grd%jsc-1,grd%jec+1 ; do grdi = grd%isc-1,grd%iec+1
@@ -853,21 +843,20 @@ module ice_shelf_tabular_calving
           do while (associated(berg))
             berg%id=abs(berg%id)
             if (berg%static_berg<3 .and. int(berg%sss)==count) then
-              !            call insert_tabular_particle_into_list(bergs%new_tabular_list%first,berg)
 
               !add berg area in cell to pf_area
-              yUxL => berg%sst
-              yUxC => berg%uo
-              yUxR => berg%vo
-              yCxL => berg%ui
-              yCxC => berg%vi
-              yCxR => berg%ua
-              yDxL => berg%va
-              yDxC => berg%ssh_x
-              yDxR => berg%ssh_y
+              yUxL = berg%sst
+              yUxC = berg%uo
+              yUxR = berg%vo
+              yCxL = berg%ui
+              yCxC = berg%vi
+              yCxR = berg%ua
+              yDxL = berg%va
+              yDxC = berg%ssh_x
+              yDxR = berg%ssh_y
 
-              call spread_variable_across_cells(grd, grd%pf_area(:,:,:), berg%length * berg%width, i ,j, &
-                                                yDxL, yDxC,yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR, 1.0)
+              call spread_variable_across_cells(grd, grd%pf_area(:,:,:), berg%length * berg%width, grdi, grdj, &
+                                                yDxL, yDxC, yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR, 1.0)
             endif
             berg=>berg%next
           enddo
@@ -898,7 +887,7 @@ module ice_shelf_tabular_calving
           endif
         enddo
       enddo; enddo
-    endif
+    endif !if max_count>0
 
     !4) Using the scalings saved on pf_area, calculate thickness and mass scaling on the partially-full particles.
     !!  Interpolate berg thickness and time-scaling (percent berg pressure vs ice-shelf pressure) to grid.
@@ -907,139 +896,134 @@ module ice_shelf_tabular_calving
       berg=>bergs%list(grdi,grdj)%first
       do while (associated(berg))
 
-        if (berg%static_berg<2) then
+        if (berg%static_berg<2) then !regular (non-calving) static or dynamic bergs
+          !cycle
           berg=>berg%next
-          cycle
-        endif
-
-        yUxL => berg%sst
-        yUxC => berg%uo
-        yUxR => berg%vo
-        yCxL => berg%ui
-        yCxC => berg%vi
-        yCxR => berg%ua
-        yDxL => berg%va
-        yDxC => berg%ssh_x
-        yDxR => berg%ssh_y
-
-        if (grd%parity_x(i,j)<0.) then
-          c1=-1
         else
-          c1=1
-        endif
 
-        if (berg%static_berg<3) then !Fully-filled bergs, or bergs that overlap a full cell:
+          yUxL = berg%sst
+          yUxC = berg%uo
+          yUxR = berg%vo
+          yCxL = berg%ui
+          yCxC = berg%vi
+          yCxR = berg%ua
+          yDxL = berg%va
+          yDxC = berg%ssh_x
+          yDxR = berg%ssh_y
 
-          if (berg%static_berg==2) then
-          !TODO: h_shelf should be calculated by routing the ice shelf mass to the icebergs module, then using the icebergs density
-          ! and frac_shelf, i.e. here, h_shelf = IS_mass/(frac_shelf * cell_area * rho_bergs)
-          ! This H may be different than the ice shelf H if iceberg density is different that ice shelf density
-          ! But, z_b will be the same.
-
-          berg%mass_scaling = 1
-
-          berg%thickness =   yCxC*h_shelf(i   ,j   ) + &
-                          (((yUxL*h_shelf(i-c1,j+c1) + yDxR*h_shelf(i+c1,j-c1))  + &
-                            (yUxR*h_shelf(i+c1,j+c1) + yDxL*h_shelf(i-c1,j-c1))) + &
-                           ((yUxC*h_shelf(i   ,j+c1) + yDxC*h_shelf(i   ,j-c1))  + &
-                            (yCxL*h_shelf(i-c1,j   ) + yCxR*h_shelf(i+c1,j   ))))/ berg%mass_scaling
-
-        elseif (berg%static_berg>2) then !Initially partially-full bergs:
-
-          count=int(berg%sss)
-
-          berg%mass_scaling =   yCxC*pf_area(grdi   ,grdj   ,count) + &
-                             (((yUxL*pf_area(grdi-c1,grdj+c1,count) + yDxR*pf_area(grdi+c1,grdj-c1,count))  + &
-                               (yUxR*pf_area(grdi+c1,grdj+c1,count) + yDxL*pf_area(grdi-c1,grdj-c1,count))) + &
-                              ((yUxC*pf_area(grdi   ,grdj+c1,count) + yDxC*pf_area(grdi   ,grdj-c1,count))  + &
-                               (yCxL*pf_area(grdi-c1,grdj   ,count) + yCxR*pf_area(grdi+c1,grdj   ,count))))
-
-
-          if (berg%mass_scaling>0) then
-            berg%thickness = (  yCxC*pf_area(grdi   ,grdj   ,count)*h_shelf(grdi   ,grdj   )   + &
-                             (((yUxL*pf_area(grdi-c1,grdj+c1,count)*h_shelf(grdi-c1,grdj+c1)   + &
-                                yDxR*pf_area(grdi+c1,grdj-c1,count)*h_shelf(grdi+c1,grdj-c1))  + &
-                               (yUxR*pf_area(grdi+c1,grdj+c1,count)*h_shelf(grdi+c1,grdj+c1)   + &
-                                yDxL*pf_area(grdi-c1,grdj-c1,count)*h_shelf(grdi-c1,grdj-c1))) + &
-                              ((yUxC*pf_area(grdi   ,grdj+c1,count)*h_shelf(grdi   ,grdj+c1)   + &
-                                yDxC*pf_area(grdi   ,grdj-c1,count)*h_shelf(grdi   ,grdj-c1))  + &
-                               (yCxL*pf_area(grdi-c1,grdj   ,count)*h_shelf(grdi-c1,grdj   )   + &
-                                yCxR*pf_area(grdi+c1,grdj   ,count)*h_shelf(grdi+c1,grdj   ))))) / berg%mass_scaling
+          if (grd%parity_x(grdi,grdj)<0.) then
+            c1=-1
           else
-            berg%thickness=0
-          endif
-        endif
-
-        !All bergs:
-
-        !The time-based pressure scaling factor. Over a timescale (hours) of bergs%shelf_to_tabular_hrs
-        !(using the icebergs module "yearday" time convention), transition smoothly between:
-        !  berg_scaling=0 for 0%   berg pressure on ocean and 100% ice shelf pressure
-        !  berg_scaling=1 for 100% berg pressure on ocean and 0%   ice shelf pressure
-        T_scale = min(((bergs%current_year*367.+bergs%current_yearday)-&
-                      (berg%start_year*367.-berg%start_day))*24./bergs%shelf_to_tabular_hours, 1.0)
-
-        !Interpolate the T_scale to the grid to modify the ice shelf pressure felt on
-        !the ocean. This interpolation accounts for the possibility of multiple tabular bergs with different
-        !T_scale that contribute to the same cell
-
-        !(1) Process "calving bergs" with T_scale==1 (these bergs have now fully-transitioned to non-static,
-        !    fully-calved bergs):
-        !--interp to grid only from calving bergs (cberg) with T_scale==1--
-        !frac_cberg_calved = sum(INTERP(cberg%area * cberg%mass_scaling))/cell_area !fraction of cell pressure
-                                                                                    !from calving bergs
-        !--Then, permanently adjust frac_shelf as--:
-        !frac_shelf = max(frac_shelf - frac_cberg_calved,0).
-        !--If frac_shelf == 0, adjust ice thickness, hmask, etc accordingly.
-        !(2) Process calving bergs with T_scale<1:
-        !--interp to the grid only from calving bergs (cberg) without T_scale==1 (these bergs have not fully-calved yet)--
-        !cberg%mass_scaling=cberg%mass_scaling * T_scale
-        !frac_cberg        = sum(INTERP(cberg%area * cberg%mass_scaling))/cell_area !fraction of cell pressure
-                                                                                    !from calving bergs
-        !--Then, implement frac_shelf as--:
-        !frac_shelf_new = max(frac_shelf - frac_cberg,0)
-        !(3) When interpolation time is up, the calving mask and associated ice shelf needs to be eliminated
-
-        if (T_scale==1) then !berg is old enough to now evolve as a dynamic berg, but will be deleted if massless
-
-          if (berg%mass_scaling==0) then
-            !remove massless particle
-            other_berg=>berg
-            berg=>berg%next
-            call delete_iceberg_from_list(bergs%list(grdi,grdj)%first,other_berg)
-          else
-            !Particle has fully calved from the ice shelf, and will evolve as a dynamic iceberg
-            !The section of the ice shelf from where the particle calved will be eliminated
-            berg%static_berg=0.
-            call spread_variable_across_cells(grd, grd%frac_cberg_calved, berg%length * berg%width * berg%mass_scaling, &
-              i ,j, yDxL, yDxC,yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR, 1.0)
-            berg=>berg%next
+            c1=1
           endif
 
-        elseif (T_scale>=0) then !berg is not yet old enough to be released as a dynamic iceberg.
-          !Keep gradually increasing berg pressure while decreasing ice-shelf pressure to ensure a smooth transition
+          if (berg%static_berg<3) then !Fully-filled bergs, or bergs that overlap a full cell:
 
-          berg%mass_scaling=berg%mass_scaling*T_scale
-          call spread_variable_across_cells(grd, grd%frac_cberg, berg%length * berg%width * berg%mass_scaling, &
-            i ,j, yDxL, yDxC,yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR, 1.0)
-          berg=>berg%next
+            if (berg%static_berg==2) then
 
-        elseif (T_scale.lt.0) then
+              berg%mass_scaling = 1
+              berg%thickness =   yCxC*h_shelf(grdi   ,grdj   ) + &
+                              (((yUxL*h_shelf(grdi-c1,grdj+c1) + yDxR*h_shelf(grdi+c1,grdj-c1))  + &
+                                (yUxR*h_shelf(grdi+c1,grdj+c1) + yDxL*h_shelf(grdi-c1,grdj-c1))) + &
+                               ((yUxC*h_shelf(grdi   ,grdj+c1) + yDxC*h_shelf(grdi   ,grdj-c1))  + &
+                                (yCxL*h_shelf(grdi-c1,grdj   ) + yCxR*h_shelf(grdi+c1,grdj   ))))
 
-          call error_mesg('KID, tabular calving from shelf','Berg pressure scaling is negative!', FATAL)
+            elseif (berg%static_berg>2) then !Initially partially-full bergs:
+              count=int(berg%sss)
+              berg%mass_scaling =   yCxC*pf_area(grdi   ,grdj   ,count) + &
+                                 (((yUxL*pf_area(grdi-c1,grdj+c1,count) + yDxR*pf_area(grdi+c1,grdj-c1,count))  + &
+                                   (yUxR*pf_area(grdi+c1,grdj+c1,count) + yDxL*pf_area(grdi-c1,grdj-c1,count))) + &
+                                  ((yUxC*pf_area(grdi   ,grdj+c1,count) + yDxC*pf_area(grdi   ,grdj-c1,count))  + &
+                                   (yCxL*pf_area(grdi-c1,grdj   ,count) + yCxR*pf_area(grdi+c1,grdj   ,count))))
 
-        endif
-      endif
-    enddo
-  enddo; enddo
+              if (berg%mass_scaling>0) then
+                berg%thickness = (  yCxC*pf_area(grdi   ,grdj   ,count)*h_shelf(grdi   ,grdj   )   + &
+                                 (((yUxL*pf_area(grdi-c1,grdj+c1,count)*h_shelf(grdi-c1,grdj+c1)   + &
+                                    yDxR*pf_area(grdi+c1,grdj-c1,count)*h_shelf(grdi+c1,grdj-c1))  + &
+                                   (yUxR*pf_area(grdi+c1,grdj+c1,count)*h_shelf(grdi+c1,grdj+c1)   + &
+                                    yDxL*pf_area(grdi-c1,grdj-c1,count)*h_shelf(grdi-c1,grdj-c1))) + &
+                                  ((yUxC*pf_area(grdi   ,grdj+c1,count)*h_shelf(grdi   ,grdj+c1)   + &
+                                    yDxC*pf_area(grdi   ,grdj-c1,count)*h_shelf(grdi   ,grdj-c1))  + &
+                                   (yCxL*pf_area(grdi-c1,grdj   ,count)*h_shelf(grdi-c1,grdj   )   + &
+                                    yCxR*pf_area(grdi+c1,grdj   ,count)*h_shelf(grdi+c1,grdj   ))))) / berg%mass_scaling
+              else
+                berg%thickness=0
+              endif
+            endif
 
-  call sum_up_spread_fields(bergs, frac_cberg_calved, 'frac_cberg_calved', ignore_mask_in=.true.)
-  call sum_up_spread_fields(bergs, frac_cberg       , 'frac_cberg'       , ignore_mask_in=.true.)
+            !--All bergs--
 
-  call mpp_update_domains(frac_cberg_calved, grd%domain)
-  call mpp_update_domains(frac_cberg,        grd%domain)
+            berg%mass = berg%width * berg%length * berg%thickness * bergs%rho_bergs
 
-    if (allocated(pf_area)) deallocate(pf_area)
+            !print *,''
+            !print *,'mass,mass_scaling',berg%mass,berg%mass_scaling
+            !print *,'L,W,T',berg%length,berg%width,berg%thickness
+            !The time-based pressure scaling factor. Over a timescale (hours) of bergs%shelf_to_tabular_hrs
+            !(using the icebergs module "yearday" time convention), transition smoothly between:
+            !  berg_scaling=0 for 0%   berg pressure on ocean and 100% ice shelf pressure
+            !  berg_scaling=1 for 100% berg pressure on ocean and 0%   ice shelf pressure
+            T_scale = min(((bergs%current_year*367.+bergs%current_yearday)-&
+                           (berg%start_year*367.-berg%start_day))*24./bergs%shelf_to_tabular_hours, 1.0)
+            ! print *,'T_scale',T_scale,bergs%current_year*367.+bergs%current_yearday,berg%start_year*367.-berg%start_day
+
+            !Interpolate the T_scale to the grid to modify the ice shelf pressure felt on
+            !the ocean. This interpolation accounts for the possibility of multiple tabular bergs with different
+            !T_scale that contribute to the same cell
+
+            !(1) Process "calving bergs" with T_scale==1 (these bergs have now fully-transitioned to non-static,
+            !    fully-calved bergs):
+            !--interp to grid only from calving bergs (cberg) with T_scale==1--
+            !frac_cberg_calved = sum(INTERP(cberg%area * cberg%mass_scaling))/cell_area !fraction of cell pressure
+            !from calving bergs
+            !--Then, permanently adjust frac_shelf as--:
+            !frac_shelf = max(frac_shelf - frac_cberg_calved,0).
+            !--If frac_shelf == 0, adjust ice thickness, hmask, etc accordingly.
+            !(2) Process calving bergs with T_scale<1:
+            !--interp to the grid only from calving bergs (cberg) without T_scale==1 (these bergs have not fully-calved yet)--
+            !cberg%mass_scaling=cberg%mass_scaling * T_scale
+            !frac_cberg        = sum(INTERP(cberg%area * cberg%mass_scaling))/cell_area !fraction of cell pressure
+            !from calving bergs
+            !--Then, implement frac_shelf as--:
+            !frac_shelf_new = max(frac_shelf - frac_cberg,0)
+            !(3) When interpolation time is up, the calving mask and associated ice shelf needs to be eliminated
+            if (T_scale==1) then !berg is old enough to now evolve as a dynamic berg, but will be deleted if massless
+
+              if (berg%mass_scaling==0) then
+                !remove massless particle
+                other_berg=>berg
+                berg=>berg%next
+                call delete_iceberg_from_list(bergs%list(grdi,grdj)%first,other_berg)
+              else
+                !Particle has fully calved from the ice shelf, and will evolve as a dynamic iceberg
+                !The section of the ice shelf from where the particle calved will be eliminated
+                berg%static_berg=0.
+                call spread_variable_across_cells(grd, grd%frac_cberg_calved, berg%length * berg%width * berg%mass_scaling, &
+                                                  grdi, grdj, yDxL, yDxC,yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR, 1.0)
+                berg=>berg%next
+              endif
+
+            elseif (T_scale>=0) then !berg is not yet old enough to be released as a dynamic iceberg.
+              !Keep gradually increasing berg pressure while decreasing ice-shelf pressure to ensure a smooth transition
+
+              berg%mass_scaling=berg%mass_scaling*T_scale
+              call spread_variable_across_cells(grd, grd%frac_cberg, berg%length * berg%width * berg%mass_scaling, &
+                                                grdi, grdj, yDxL, yDxC,yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR, 1.0)
+              berg=>berg%next
+
+            elseif (T_scale.lt.0) then
+              call error_mesg('KID, tabular calving from shelf','Berg pressure scaling is negative!', FATAL)
+            endif
+          endif !end if (berg%static_berg<3)
+        endif ! end if (berg%static_berg<2)
+      enddo !do while associated berg
+    enddo; enddo
+
+    print *,'Tscale',T_scale
+  call sum_up_spread_fields(bergs, frac_cberg_calved(grd%isc:grd%iec,grd%jsc:grd%jec), 'frac_cberg_calved', ignore_mask_in=.true.)
+  call sum_up_spread_fields(bergs, frac_cberg(grd%isc:grd%iec,grd%jsc:grd%jec)       , 'frac_cberg'       , ignore_mask_in=.true.)
+  call mpp_update_domains(frac_cberg_calved, grd%domain, complete=.false.)
+  call mpp_update_domains(frac_cberg,        grd%domain, complete=.true.)
+  if (allocated(pf_area)) deallocate(pf_area)
   end subroutine new_tabular_bergs_thickness_and_pressure
 
   !> Initialize (begin calving) a tabular iceberg particle from an ice shelf at the given lat/lon coordinates.
@@ -1061,7 +1045,7 @@ module ice_shelf_tabular_calving
     logical :: lret, lres
     real :: xi, yj, calving_to_bergs, calved_to_berg, heat_to_bergs, heat_to_berg
     integer :: stderrunit
-    real, pointer :: initial_mass, mass_scaling, initial_thickness, initial_width, initial_length
+    real, pointer :: mass_scaling, initial_thickness, initial_width, initial_length
     logical :: allocations_done
     real :: rx,ry,yDxL, yDxC, yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR,c1
     real :: pmask, width
@@ -1118,7 +1102,7 @@ module ice_shelf_tabular_calving
     !   rx = 2.*rx - 1.; ry = 2.*ry - 1.
     ! endif
 
-    call calving_tabular_particle_grid_overlap(bergs, width*2, i, j, x, y, &
+    call calving_tabular_particle_grid_overlap(bergs, width*width, i, j, x, y, &
                                                yDxL, yDxC, yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR)
 
     if (grd%parity_x(i,j)<0.) then
@@ -1157,14 +1141,6 @@ module ice_shelf_tabular_calving
       endif
     endif
 
-    ! if (pmask<1) then
-    !   !if the new particle is partially-full, mark it by setting static_berg==-3
-    !   newberg%static_berg=-3
-    ! else
-    !   !mark new full particles by setting static_berg==-2
-    !   newberg%static_berg=-2
-    ! endif
-
     !otherwise, save its overlap with neighboring cells, making use of some otherwise unneeded icenewberg memory
     newberg%sst   = yUxL
     newberg%uo    = yUxC
@@ -1187,14 +1163,6 @@ module ice_shelf_tabular_calving
 
     !Do not calve grounded particles?
     !if ((bergs%rho_bergs/rho_seawater)*berg%thickness>newberg%od) return
-
-    !update mass. TODO: make sure ice sheet has same density as berg
-    !OR, really should interpolate mass, not thickness, to the particles
-    !then, back out the thickness afterwards...then, density of berg doesn't technically even have
-    !to be the same as the ice shelf (but really, it should be, especially if we ever want to
-    !couple with atmosphere: if interpolating mass, inconsistency in density would not cause differences in
-    !z_b vs. the ice shelf, but would cause differences in z_b vs. the ice shelf).
-    !Need to assign mass, start_mass, and mass_scaling elswhere
 
     newberg%lon=lon; newberg%lat=lat
     newberg%ine=i;   newberg%jne=j
@@ -1411,8 +1379,7 @@ module ice_shelf_tabular_calving
   end subroutine calving_tabular_particle_grid_overlap
 
   !> Returns a list of partially-full bergs connected to full bergs
-  recursive subroutine make_list_of_bonded_to_full(bergs,berg,first)
-    type(icebergs), pointer :: bergs !< Container for all types and memory
+  recursive subroutine make_list_of_bonded_to_full(berg,first)
     type(iceberg), pointer :: berg !< Berg to process
     type(iceberg), pointer :: first !< The first berg in the list of tabular bergs
     ! Local variables
@@ -1428,7 +1395,7 @@ module ice_shelf_tabular_calving
           !this berg has not been processed
           other_berg%id=-other_berg%id
           if (other_berg%static_berg==2) then
-            call make_list_of_bonded_to_full(bergs, other_berg, first)
+            call make_list_of_bonded_to_full(other_berg, first)
           else
             call insert_tabular_particle_into_list(first, other_berg)
             other_berg%sss=1 !Marks the berg as 1 bond away from a filled berg
@@ -1442,8 +1409,7 @@ module ice_shelf_tabular_calving
   !> This is the same as make_list_of_bonded_to_full except the list is of bergs bonded to
   !! bergs with static_berg=2.5 (partially-full, and not eventually connecting to a full berg,
   !! but overlapping a full ice shelf grid cell).
-  recursive subroutine make_list_of_bonded_to_full2(bergs,berg,first)
-    type(icebergs), pointer :: bergs !< Container for all types and memory
+  recursive subroutine make_list_of_bonded_to_full2(berg,first)
     type(iceberg), pointer :: berg !< Berg to process
     type(iceberg), pointer :: first !< The first berg in the list of tabular bergs
     ! Local variables
@@ -1452,7 +1418,7 @@ module ice_shelf_tabular_calving
     integer :: stderrunit
 
     ! Get the stderr unit number
-    stderrunit = stderr()    
+    stderrunit = stderr()
 
     berg%sss=1
     current_bond=>berg%first_bond
@@ -1463,7 +1429,7 @@ module ice_shelf_tabular_calving
           !this berg has not been processed
           other_berg%id=-other_berg%id
           if (other_berg%static_berg==2.5) then
-            call make_list_of_bonded_to_full2(bergs, other_berg, first)
+            call make_list_of_bonded_to_full2(other_berg, first)
           elseif (other_berg%static_berg==2) then
             call insert_tabular_particle_into_list(first, other_berg)
             !The parent berg with static_berg=2.5 is treated as if it is 1 bond away from a filled berg
@@ -1482,15 +1448,15 @@ module ice_shelf_tabular_calving
   end subroutine make_list_of_bonded_to_full2
 
   !> Determine how many bonds away from a full particle each partially-full particle is.
-  subroutine assign_bonds_from_full(bergs,berg,first,count)
-    type(icebergs), pointer :: bergs !< Container for all types and memory
-    type(iceberg), pointer :: berg !< Berg to process
+  subroutine assign_bonds_from_full(first,count)
     type(iceberg), pointer :: first !< The first berg to add to the tabular list
     integer :: count !> tracks number of bonds away from a "full" particle
     ! Local variables
+    type(iceberg), pointer :: berg ! Berg to process
     type(bond), pointer :: current_bond
     type(iceberg), pointer :: other_berg, prev_berg
 
+    berg=>first
     do while (associated(berg))
       current_bond=>berg%first_bond
       do while (associated(current_bond))
@@ -1508,17 +1474,19 @@ module ice_shelf_tabular_calving
         current_bond=>current_bond%next_bond
       enddo
       prev_berg=>berg
+
       if (associated(berg%next_t)) then
         berg=>berg%next_t
+        call delete_tabular_particle_from_list(first, prev_berg)
       else
+        !Delete the berg that was just processed from the list
+        !If it is at the start of the list, the the whole list is nullified.
+        call delete_tabular_particle_from_list(first, prev_berg)
         !the end of the list has been reached. Restart from the beginning of the list,
         !which may have new bergs added
         berg=>first
         count=count+1
       endif
-      !Delete the berg that was just processed from the list
-      !If it is at the start of the list, the the whole list is nullified.
-      call delete_tabular_particle_from_list(first, prev_berg)
     enddo
   end subroutine assign_bonds_from_full
 
@@ -1544,20 +1512,23 @@ module ice_shelf_tabular_calving
   end subroutine insert_tabular_particle_into_list
 
   !> Remove a berg from the list of tabular iceberg particles
-  subroutine delete_tabular_particle_from_list(first, berg)
+  subroutine delete_tabular_particle_from_list(first, this)
     ! Arguments
     type(iceberg), pointer :: first !< List of tabular bergs
-    type(iceberg), pointer :: berg !< Berg to be deleted
-    ! Local variables
+    type(iceberg), pointer :: this !< Berg to be deleted
+
 
     ! Connect neighbors to each other
-    if (associated(berg%prev_t)) berg%prev_t%next_t=>berg%next_t
-    if (associated(berg%next_t)) berg%next_t%prev_t=>berg%prev_t
+    if (associated(this%prev_t)) this%prev_t%next_t=>this%next_t
+    if (associated(this%next_t)) this%next_t%prev_t=>this%prev_t
 
-    berg%prev_t=>NULL()
-    berg%next_t=>NULL()
+    ! If deleting the first berg particle, need to reassign the next particle
+    ! as the front of the list
+    if (this%id.eq.first%id) first=>this%next_t
 
-    if (berg%id.eq.first%id) first=>NULL()
+    this%prev_t=>NULL()
+    this%next_t=>NULL()
+
   end subroutine delete_tabular_particle_from_list
 
 end module ice_shelf_tabular_calving

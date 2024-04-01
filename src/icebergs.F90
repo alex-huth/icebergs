@@ -58,7 +58,7 @@ use ice_bergs_framework, only: hexagon_into_quadrants_using_triangles
 use ice_bergs_framework, only: sum_up_spread_fields, sum_up_spread_fields, Area_of_triangle
 use ice_bergs_framework, only: point_in_triangle, point_in_interval, point_is_on_the_line
 use ice_bergs_framework, only: convert_from_grid_to_meters, convert_from_meters_to_grid
-use ice_bergs_framework, only: spread_variable_across_cells
+use ice_bergs_framework, only: spread_variable_across_cells, find_orientation_using_iceberg_bonds
 
 use ice_bergs_io,        only: ice_bergs_io_init, write_restart_bergs, write_trajectory, write_bond_trajectory
 use ice_bergs_io,        only: read_restart_bergs, read_restart_calving
@@ -364,293 +364,6 @@ subroutine hexagon_test()
   if (fail_unit_test) call error_mesg('KID, hexagon unit testing:', 'Hexagon unit testing does not pass!', FATAL)
 
 end subroutine hexagon_test
-
-! !> Initializes bonds
-! subroutine initialize_iceberg_bonds(bergs, tabular_calving_only)
-!   ! Arguments
-!   type(icebergs), pointer :: bergs !< Container for all types and memory
-!   logical, intent(in), optional :: tabular_calving_only
-!   ! Local variables
-!   type(iceberg), pointer :: berg
-!   type(iceberg), pointer :: other_berg
-!   type(icebergs_gridded), pointer :: grd
-!   type(bond) , pointer :: current_bond
-!   logical :: already_bonded, tabular_calving
-!   real :: T1, L1, W1, lon1, lat1, x1, y1, R1, A1   !Current iceberg
-!   real :: T2, L2, W2, lon2, lat2, x2, y2, R2, A2   !Other iceberg
-!   real :: dlon,dlat
-!   real :: dx_dlon,dy_dlat, lat_ref
-!   real :: r_dist_x, r_dist_y, r_dist
-!   real :: radius1,radius2,rdenom
-!   integer :: grdi_outer, grdj_outer
-!   integer :: grdi_inner, grdj_inner
-
-!   tabular_calving=.false.
-!   if (present(tabular_calving_only)) then
-!     if (tabular_calving_only) tabular_calving=.true.     !only bond newly-calved tabular icebergs
-!   endif
-
-!   if (bergs%manually_initialize_bonds_from_radii) then
-!     if (bergs%hexagonal_icebergs) then
-!       rdenom=1./(2.*sqrt(3.))
-!     else
-!       !rdenom=1./pi
-!       rdenom=1./4.
-!     endif
-!   endif
-
-!   ! For convenience
-!   grd=>bergs%grd
-!   !Should update halos before doing this
-!   ! do grdj_outer = grd%jsc,grd%jec ; do grdi_outer = grd%isc,grd%iec  !Should you be on the data domain??
-!   do grdj_outer = grd%jsd,grd%jed ; do grdi_outer = grd%isd,grd%ied  !using data domain -Alex
-!     berg=>bergs%list(grdi_outer,grdj_outer)%first
-!     do while (associated(berg)) ! loop over all bergs
-
-!       if (tabular_calving .and. berg%static_berg>=0) then
-!         berg=>berg%next
-!         cycle
-!       endif
-
-!       lon1=berg%lon; lat1=berg%lat
-!       !call rotpos_to_tang(lon1,lat1,x1,y1)  !Is this correct? Shouldn't it only be on tangent plane?
-
-!       ! do grdj_inner = grd%jsc,grd%jec ; do grdi_inner = grd%isc,grd%iec  !This line uses n^2 steps
-!       do grdj_inner = grd%jsd,grd%jed ; do grdi_inner = grd%isd,grd%ied !Uses n^2 steps. Change to data domain-Alex
-! !     do grdj_inner = berg%jne-1,berg%jne+1 ; do grdi_inner = berg%ine-1,berg%ine+1   !Only looping through adjacent cells.
-!         other_berg=>bergs%list(grdi_inner,grdj_inner)%first
-!         do while (associated(other_berg)) ! loop over all other bergs
-
-!           if (tabular_calving .and. other_berg%static_berg>=0) then
-!             other_berg=>other_berg%next
-!             cycle
-!           endif
-
-!           if (berg%id .ne. other_berg%id) then
-!             !first, make sure the bergs are not bonded already
-!             already_bonded=.false.
-!             current_bond=>berg%first_bond
-!             do while (associated(current_bond))
-!               if (current_bond%other_id .ne. other_berg%id) then
-!                 current_bond=>current_bond%next_bond
-!               else
-!                 current_bond=>null()
-!                 already_bonded=.true.
-!               endif
-!             enddo
-
-!             if (.not. already_bonded) then
-!               lon2=other_berg%lon; lat2=other_berg%lat
-!               dlon=lon1-lon2;      dlat=lat1-lat2
-!               lat_ref=0.5*(lat1+lat2)
-!               call convert_from_grid_to_meters(lat_ref,grd%grid_is_latlon,dx_dlon,dy_dlat)
-!               r_dist_x=dlon*dx_dlon
-!               r_dist_y=dlat*dy_dlat
-!               r_dist=sqrt( (r_dist_x**2) + (r_dist_y**2) )
-
-!               if (bergs%manually_initialize_bonds_from_radii) then
-!                 radius1=sqrt(berg%length*berg%width*rdenom)
-!                 radius2=sqrt(other_berg%length*other_berg%width*rdenom)
-!                 !radius=sqrt(min(berg%length*berg%width,other_berg%length*other_berg%width))
-!                 if (r_dist.lt.1.25*(radius1+radius2)) &
-!                   call form_a_bond(berg, other_berg%id, other_berg%ine, other_berg%jne, other_berg)
-!               elseif (r_dist.lt.bergs%length_for_manually_initialize_bonds) then
-!                 ! If the bergs are closer than bergs%length_for_manually_initialize_bonds, then form a bond -Alex
-!                 call form_a_bond(berg, other_berg%id, other_berg%ine, other_berg%jne, other_berg)
-!               endif
-!             endif
-!           endif
-!           other_berg=>other_berg%next
-!         enddo  ! End of looping through all other bergs in the inner list
-!       enddo ; enddo;  !End of inner loop
-!       berg=>berg%next
-!     enddo ! End of looping through all bergs in the outer list
-!   enddo ; enddo; !End of outer loop.
-
-! end subroutine initialize_iceberg_bonds
-
-! !> Returns a list of partially-full bergs connected to full bergs, and the id of the berg at the end of this list
-! recursive subroutine make_list_of_bonded_to_full(bergs,berg,first)
-!   type(icebergs), pointer :: bergs !< Container for all types and memory
-!   type(iceberg), pointer :: berg !< Berg to process
-!   type(iceberg), pointer :: this !< The first berg to add to the tabular list
-!   ! Local variables
-!   type(bond), pointer :: current_bond
-
-!   current_bond=>berg%first_bond
-!   do while (associated(current_bond))
-!     if  (associated(current_bond%other_berg)) then
-!       other_berg=>current_bond%other_berg
-!       if (other_berg%id>0) then
-!         !this berg has not been processed
-!         other_berg%id=-other_berg%id
-!         if (berg%static_berg===2) then
-!           call make_list_of_bonded_to_full(bergs, other_berg, first)
-!         else
-!           call insert_tabular_particle_into_list(first, other_berg)
-!           other_berg%sss=1
-!         endif
-!       endif
-!     endif
-!     current_bond=>current_bond%next_bond
-!   enddo
-! end subroutine make_list_of_bonded_to_full
-
-! !> Determine how many bonds away from a full particle each partially-full particle is.
-! recursive subroutine assign_bonds_from_full(bergs,berg,first,count)
-!   type(icebergs), pointer :: bergs !< Container for all types and memory
-!   type(iceberg), pointer :: berg !< Berg to process
-!   type(iceberg), pointer :: this !< The first berg to add to the tabular list
-!   integer :: last_id !< Lat Berg ID in the tabular berg list with count
-!   ! Local variables
-!   type(bond), pointer :: current_bond
-!   type(iceberg), pointer :: other_berg, prev_berg
-
-!   do while associated(berg)
-!     current_bond=>berg%first_bond
-!     do while (associated(current_bond))
-!       if  (associated(current_bond%other_berg)) then
-!         other_berg=>current_bond%other_berg
-!         if (other_berg%id>0) then
-!           !this berg has not been processed
-!           other_berg%id=-other_berg_id
-!           !Add the berg to the front of the list of
-!           !partially-full tabular berg particles
-!           call insert_tabular_particle_into_list(first, other_berg)
-!           other_berg%sss=count
-!         endif
-!       endif
-!       current_bond=>current_bond%next_bond
-!     enddo
-!     prev_berg=>berg
-!     if (associated(berg%next_tab)) then
-!       berg=>berg%next_tab
-!     else
-!       !the end of the list has been reached. Restart from the beginning of the list,
-!       !which may have new bergs added
-!       berg=>first
-!       count=count+1
-!     endif
-!     !Delete the berg that was just processed from the list
-!     call delete_tabular_particle_from_list(first, prev_berg)
-!   enddo
-! end subroutine assign_bonds_from_full
-
-
-
-! !> returns the berg in a conglomerate from which the edge mass redistribution routine will start. This "starting berg"
-! !! is the berg in the conglomerate with the smallest latitude, and the smallest longitude for that latitude.
-! recursive subroutine find_starting_edge_berg_in_conglom(bergs,berg,lat,lon,sw_berg)
-!   type(icebergs), pointer :: bergs !< Container for all types and memory
-!   type(iceberg), pointer :: berg !< Berg to process
-!   type(iceberg), pointer :: first_berg !< The "southwest" berg
-!   real :: lat,lon
-!   ! Local variables
-!   type(bond), pointer :: current_bond
-
-!   berg%id=-berg%id
-!   if (other_berg%lat<lat) then
-!     lat=other_berg%lat
-!     sw_berg => other_berg
-!   elseif (other_berg%lat==lat) then
-!     if (other_berg%lon<lon) then
-!       lon=other_berg%lon
-!       sw_berg => other_berg
-!     endif
-!   endif
-!   current_bond=>berg%first_bond
-!   do while (associated(current_bond))
-!     if  (associated(current_bond%other_berg)) then
-!       other_berg=>current_bond%other_berg
-!       if (other_berg%id>0) then
-!         if (berg%mass_scaling<1 .and. other_berg%n_bonds<bergs%max_bonds) then
-!           other_berg%
-!           call find_starting_edge_berg_in_conglom(bergs,other_berg,lat,lon)
-!         endif
-!       endif
-!     endif
-!     current_bond=>current_bond%next_bond
-!   enddo
-
-! end subroutine find_starting_edge_berg_in_conglom
-
-! !> Redistributes the mass from outer edge iKID particles to inner, partially-full particles
-! !! Also resets all berg%ids that were previously set negative while finding the SW berg in
-! !! find_SW_edge_berg_in_conglom
-! recursive subroutine redistribute_iKID_edge_mass(bergs,berg)
-!   type(icebergs), pointer :: bergs !< Container for all types and memory
-!   type(iceberg), pointer :: start_berg !< Berg to process
-!   ! Local variables
-!   type(iceberg), pointer :: berg !< the SW berg
-
-!   !For partially-full edge particles with fewer bonds than max_bonds, or which are bonded to a berg with mass_scaling==0"
-!   !Redistribute the mass as evenly as possible to interior, partially-full particles. This is done by finding the minimum
-!   !mass that can be contributed to all eligible bonded particles and distributing that same value continuously until there
-!   !is no more mass to give (or receive). Then, move on to the next eligible edge particle (which has not yet been processed,
-!   !with the lowest ID.
-
-!   start_berg => berg
-
-!   call
-
-!   berg%id=abs(berg%id)
-
-!   if (berg%lat.eq.lat .and. berg%lon.eq.lon) then
-!     call redistribute_iKID_edge_mass(bergs,berg)
-!   else
-
-!     current_bond=>berg%first_bond
-!     do while (associated(current_bond))
-!       if  (associated(current_bond%other_berg)) then
-!         other_berg=>current_bond%other_berg
-!         if (other_berg%id<0) then
-!           !        if (berg%mass_scaling==0 .or. other_berg%mass_scaling==0 .or. other_berg%n_bonds<bergs%max_bonds) then
-!           call call_redistribute_iKID_edge_mass_from_SW_berg(bergs,other_berg,lat,lon)
-!           !        endif
-!         endif
-!       endif
-!       current_bond=>current_bond%next_bond
-!     enddo
-!   endif
-
-! end subroutine redistribute_iKID_edge_mass
-
-
-! !> Returns metric converting grid distances to meters
-! subroutine convert_from_grid_to_meters(lat_ref, grid_is_latlon, dx_dlon, dy_dlat)
-!   ! Arguments
-!   real, intent(in) :: lat_ref !< Latitude at which to make metric conversion (degree N)
-!   logical, intent(in) :: grid_is_latlon !< True if grid model grid is in lat-lon coordinates
-!   real, intent(out) :: dx_dlon !< Metric dx/dlon
-!   real, intent(out) :: dy_dlat !< Metric dy/dlat
-
-!   if (grid_is_latlon) then
-!     dx_dlon=(pi/180.)*Rearth*cos((lat_ref)*(pi/180.))
-!     dy_dlat=(pi/180.)*Rearth
-!   else
-!     dx_dlon=1.
-!     dy_dlat=1.
-!   endif
-
-! end subroutine convert_from_grid_to_meters
-
-! !> Returns metric converting distance in meters to grid distance
-! subroutine  convert_from_meters_to_grid(lat_ref,grid_is_latlon ,dlon_dx,dlat_dy)
-!   ! Arguments
-!   real, intent(in) :: lat_ref !< Latitude at which to make metric conversion (degree N)
-!   logical, intent(in) :: grid_is_latlon !< True if grid model grid is in lat-lon coordinates
-!   real, intent(out) :: dlon_dx !< Metric dlon/dx
-!   real, intent(out) :: dlat_dy !< Metric dlat/dy
-
-!   if (grid_is_latlon) then
-!     dlon_dx=(180./pi)/(Rearth*cos((lat_ref)*(pi/180.)))
-!     dlat_dy=(180./pi)/Rearth
-!   else
-!     dlon_dx=1.
-!     dlat_dy=1.
-!   endif
-
-! end subroutine convert_from_meters_to_grid
 
 !> Calculates interactions between a berg and all bergs in range
 subroutine interactive_force(bergs, berg, IA_x, IA_y, u0, v0, u1, v1,&
@@ -3592,7 +3305,7 @@ real :: tmp
 
   !Special case for icebergs not decaying, but mass diffence being used for melt rates
   if ((bergs%find_melt_using_spread_mass) .and.  (bergs%Iceberg_melt_without_decay)) then
-    call sum_up_spread_fields(bergs, spread_mass_tmp(grd%isc:grd%iec,grd%jsc:grd%jec),'mass')
+    call sum_up_spread_fields(bergs, spread_mass_tmp(grd%isc:grd%iec,grd%jsc:grd%jec),'mass', ignore_mask_in=bergs%tabular_calving)
   endif
 
   !Loop through icebergs and spread mass on ocean
@@ -3601,19 +3314,19 @@ real :: tmp
   !Finding the spread fields
   if ((grd%id_spread_uvel>0)  .or. (bergs%pass_fields_to_ocean_model)) then
     grd%spread_uvel(:,:)=0.
-    call sum_up_spread_fields(bergs, grd%spread_uvel(grd%isc:grd%iec,grd%jsc:grd%jec), 'Uvel')
+    call sum_up_spread_fields(bergs, grd%spread_uvel(grd%isc:grd%iec,grd%jsc:grd%jec), 'Uvel', ignore_mask_in=bergs%tabular_calving)
   endif
   if ( (grd%id_spread_vvel>0)  .or. (bergs%pass_fields_to_ocean_model)) then
     grd%spread_vvel(:,:)=0.
-    call sum_up_spread_fields(bergs, grd%spread_vvel(grd%isc:grd%iec,grd%jsc:grd%jec), 'Vvel')
+    call sum_up_spread_fields(bergs, grd%spread_vvel(grd%isc:grd%iec,grd%jsc:grd%jec), 'Vvel', ignore_mask_in=bergs%tabular_calving)
   endif
   if ( (grd%id_spread_area>0)  .or. (bergs%pass_fields_to_ocean_model)) then
     grd%spread_area(:,:)=0.
-    call sum_up_spread_fields(bergs, grd%spread_area(grd%isc:grd%iec,grd%jsc:grd%jec), 'area')
+    call sum_up_spread_fields(bergs, grd%spread_area(grd%isc:grd%iec,grd%jsc:grd%jec), 'area', ignore_mask_in=bergs%tabular_calving)
   endif
   !Always find spread_mass since it is used for so many things.
   grd%spread_mass(:,:)=0.
-    call sum_up_spread_fields(bergs, grd%spread_mass(grd%isc:grd%iec,grd%jsc:grd%jec),'mass')
+    call sum_up_spread_fields(bergs, grd%spread_mass(grd%isc:grd%iec,grd%jsc:grd%jec),'mass', ignore_mask_in=bergs%tabular_calving)
 
   !Using spread_mass_to_ocean to calculate melt rates (if this option is chosen)
   if (bergs%find_melt_using_spread_mass) then
@@ -4008,72 +3721,6 @@ subroutine calculate_density(T, S, pressure, rho, Rho_T0_S0, dRho_dT, dRho_dS)
   rho = Rho_T0_S0 + dRho_dT*T + dRho_dS*S
 end subroutine calculate_density
 
-!> Returns orientation of a berg determined by its bonds
-subroutine find_orientation_using_iceberg_bonds(grd, berg, orientation)
-  ! Arguments
-  type(icebergs_gridded), pointer :: grd !< Container for gridded fields
-  type(iceberg), pointer :: berg !< Berg for which orientation is needed
-  real, intent(inout) :: orientation !< Angle of orientation (radians)
-  ! Local variables
-  type(iceberg), pointer :: other_berg
-  type(bond), pointer :: current_bond
-  real :: angle, lat1,lat2,lon1,lon2,dlat,dlon
-  real :: r_dist_x, r_dist_y
-  real :: lat_ref, dx_dlon, dy_dlat
-  real :: theta, bond_count, Average_angle
-
-  bond_count=0.
-  Average_angle=0.
-  !Don't check orientation of the edges of halo,  since they can contain unassosiated bonds  (this is why halo width must be larger >= 2 to use bonds)
-  if  (  ((berg%ine .gt.  grd%isd) .and. (berg%ine .lt. grd%ied)) .and. ((berg%jne .ge.  grd%jsd) .and. (berg%jne .le. grd%jed) ) ) then
-    current_bond=>berg%first_bond
-    lat1=berg%lat
-    lon1=berg%lon
-    do while (associated(current_bond)) ! loop over all bonds
-      other_berg=>current_bond%other_berg
-      if (.not. associated(other_berg)) then !good place for debugging
-        !One valid option: current iceberg is on the edge of halo, with other berg on the next pe (not influencing mass spreading)
-        !print *, 'Iceberg bond details:',berg%id, current_bond%other_id,berg%halo_berg, mpp_pe()
-        !print *, 'Iceberg bond details2:',berg%ine, berg%jne, current_bond%other_berg_ine, current_bond%other_berg_jne
-        !print *, 'Iceberg isd,ied,jsd,jed:',grd%isd, grd%ied, grd%jsd, grd%jed
-        !print *, 'Iceberg isc,iec,jsc,jec:',grd%isc, grd%iec, grd%jsc, grd%jec
-        !call error_mesg('KID,calculating orientation', 'Looking at bond interactions of unassosiated berg!' ,FATAL)
-        !endif
-      else
-        lat2=other_berg%lat
-        lon2=other_berg%lon
-
-        dlat=lat2-lat1
-        dlon=lon2-lon1
-
-        lat_ref=0.5*(lat1+lat2)
-        call convert_from_grid_to_meters(lat_ref,grd%grid_is_latlon,dx_dlon,dy_dlat)
-        r_dist_x=dlon*dx_dlon
-        r_dist_y=dlat*dy_dlat
-
-        if (r_dist_x .eq. 0.) then
-          angle=pi/2.
-        else
-          angle=atan(r_dist_y/r_dist_x)
-          angle= ((pi/2.)  - (orientation*(pi/180.)))  - angle
-          !print *, 'angle: ', angle*(180/pi), initial_orientation
-          angle=modulo(angle ,pi/3.)
-        endif
-        bond_count=bond_count+1.
-        Average_angle=Average_angle+angle
-      endif
-      current_bond=>current_bond%next_bond
-    enddo  !End loop over bonds
-    if (bond_count.gt.0) then
-      Average_angle =Average_angle/bond_count
-    else
-      Average_angle =0.
-    endif
-    orientation=modulo(Average_angle ,pi/3.)
-  endif
-
-end subroutine find_orientation_using_iceberg_bonds
-
 !> Spread mass of a berg around cells centered on i,j
 subroutine spread_mass_across_ocean_cells(bergs, berg, i, j, x, y, Mberg, Mbits, scaling, Area, Tn, addfootloose)
   ! Arguments
@@ -4169,6 +3816,8 @@ subroutine spread_mass_across_ocean_cells(bergs, berg, i, j, x, y, Mberg, Mbits,
       yC=max(0., 1.-(yD+yU))
     endif
 
+    if (berg%static_berg<2) then
+      !non-tabular-calving bergs
     yDxL=yD*xL*grd%msk(i-1,j-1)
     yDxC=yD*xC*grd%msk(i  ,j-1)
     yDxR=yD*xR*grd%msk(i+1,j-1)
@@ -4177,13 +3826,24 @@ subroutine spread_mass_across_ocean_cells(bergs, berg, i, j, x, y, Mberg, Mbits,
     yUxL=yU*xL*grd%msk(i-1,j+1)
     yUxC=yU*xC*grd%msk(i  ,j+1)
     yUxR=yU*xR*grd%msk(i+1,j+1)
+  else
+    !tabular-calving bergs
+    yDxL=yD*xL
+    yDxC=yD*xC
+    yDxR=yD*xR
+    yCxL=yC*xL
+    yCxR=yC*xR
+    yUxL=yU*xL
+    yUxC=yU*xC
+    yUxR=yU*xR
+  endif
     yCxC=1.-( ((yDxL+yUxR)+(yDxR+yUxL)) + ((yCxL+yCxR)+(yDxC+yUxC)) )
 
     fraction_used=1. ! rectangular bergs do share mass with boundaries (all mass is included in cells)
 
   else ! Spread mass as if elements area hexagonal
 
-    orientation=bergs%initial_orientation
+    orientation=bergs%initial_orientation*(pi/180)
     if ((bergs%iceberg_bonds_on) .and. (bergs%rotate_icebergs_for_mass_spreading)) call find_orientation_using_iceberg_bonds(grd,berg,orientation)
 
     if (grd%area(i,j)>0) then
@@ -4336,521 +3996,6 @@ real function roundoff(x,sig_fig)
   !roundoff=round(x*(10**(sig_fig))
   roundoff=(FLOAT(INT(x * (10.**sig_fig) + 0.5)) / (10.**sig_fig))
 end function roundoff
-
-!!$!> Returns true of a point is in or on the rectangle with opposite corners A and B
-!!$logical function point_in_interval(Ax, Ay, Bx, By, px, py)
-!!$  ! Arguments
-!!$  real, intent(in) :: Ax !< x-position of corner A
-!!$  real, intent(in) :: Ay !< y-position of corner A
-!!$  real, intent(in) :: Bx !< x-position of corner B
-!!$  real, intent(in) :: By !< y-position of corner B
-!!$  real, intent(in) :: px !< x-position of point
-!!$  real, intent(in) :: py !< y-position of point
-!!$  point_in_interval=.False.
-!!$  if ((px <= max(Ax,Bx)) .and. (px >= min(Ax,Bx))) then
-!!$    if ((py <= max(Ay,By)) .and. (py >= min(Ay,By))) then
-!!$      point_in_interval=.True.
-!!$    endif
-!!$  endif
-!!$end function point_in_interval
-!!$
-!!$!> Returns true if point q is on a line through points A and B
-!!$logical function point_is_on_the_line(Ax, Ay, Bx, By, qx, qy)
-!!$  ! Arguments
-!!$  real, intent(in) :: Ax !< x-position of point A
-!!$  real, intent(in) :: Ay !< y-position of point A
-!!$  real, intent(in) :: Bx !< x-position of point B
-!!$  real, intent(in) :: By !< y-position of point B
-!!$  real, intent(in) :: qx !< x-position of point q
-!!$  real, intent(in) :: qy !< y-position of point q
-!!$  ! Local variables
-!!$  real :: tol, dxc,dyc,dxl,dyl,cross
-!!$  !tol=1.e-12
-!!$  tol=0.0
-!!$  dxc = qx - Ax
-!!$  dyc = qy - Ay
-!!$  dxl = Bx - Ax
-!!$  dyl = By - Ay
-!!$  cross = dxc * dyl - dyc * dxl
-!!$  if (abs(cross)<=tol) then
-!!$    point_is_on_the_line=.True.
-!!$  else
-!!$   point_is_on_the_line=.False.
-!!$  endif
-!!$end function point_is_on_the_line
-
-!!$!> Returns True if a point q is inside a triangle ABC
-!!$!!
-!!$!! This function decides whether a point (qx,qy) is inside the triangle ABC.
-!!$!! There is also the option to include the boundary of the triangle.
-!!$logical function point_in_triangle(Ax, Ay, Bx, By, Cx, Cy, qx, qy)
-!!$  ! Arguments
-!!$  real, intent(in) :: Ax !< x-position of corner A
-!!$  real, intent(in) :: Ay !< y-position of corner A
-!!$  real, intent(in) :: Bx !< x-position of corner B
-!!$  real, intent(in) :: By !< y-position of corner B
-!!$  real, intent(in) :: Cx !< x-position of corner C
-!!$  real, intent(in) :: Cy !< y-position of corner C
-!!$  real, intent(in) :: qx !< x-position of point q
-!!$  real, intent(in) :: qy !< y-position of point q
-!!$  ! Local variables
-!!$  real :: l0,l1,l2,p0,p1,p2
-!!$  real :: v0x,v1x,v2x,v0y,v1y,v2y,dot00,dot01,dot02,dot11,dot12
-!!$
-!!$  point_in_triangle = .False.
-!!$  if ((Ax==qx .and. Ay==qy) .or. (Bx==qx .and. By==qy) .or. (Cx==qx .and. Cy==qy)) then ! Exclude the pathelogical case
-!!$      point_in_triangle = .False.
-!!$  else
-!!$    if (((point_is_on_the_line(Ax,Ay,Bx,By,qx,qy) .or. (point_is_on_the_line(Ax,Ay,Cx,Cy,qx,qy))) .or. (point_is_on_the_line(Bx,By,Cx,Cy,qx,qy)))) then
-!!$      point_in_triangle = .False.
-!!$    else
-!!$      ! Compute point in triangle using Barycentric coordinates (the same as sum_sign_dot_prod routines)
-!!$      l0=(qx-Ax)*(By-Ay)-(qy-Ay)*(Bx-Ax)
-!!$      l1=(qx-Bx)*(Cy-By)-(qy-By)*(Cx-Bx)
-!!$      l2=(qx-Cx)*(Ay-Cy)-(qy-Cy)*(Ax-Cx)
-!!$
-!!$      p0=sign(1., l0); if (l0==0.)  p0=0.
-!!$      p1=sign(1., l1); if (l1==0.)  p1=0.
-!!$      p2=sign(1., l2); if (l2==0.)  p2=0.
-!!$
-!!$      if ( (abs(p0)+abs(p2))+(abs(p1)) == abs((p0+p2)+(p1)) )  point_in_triangle = .True.
-!!$    endif
-!!$  endif
-!!$end function point_in_triangle
-
-!!$!> Calculates the two areas of a triangle divided by an axis line
-!!$!!
-!!$!! This function calculates the area of a triangle on opposite sides of an axis when the
-!!$!! triangle is split with two points on one side, and one point on the other.
-!!$!! In this function, A is the point on one side of the axis, and B,C are on the opposite sides.
-!!$!! \todo You should change this name a little, so that it not similar the other routine.
-!!$subroutine Area_of_triangle_across_axes(Ax, Ay, Bx, By, Cx, Cy, axis1, Area_positive, Area_negative)
-!!$  ! Arguments
-!!$  real, intent(in) :: Ax !< x-position of corner A
-!!$  real, intent(in) :: Ay !< y-position of corner A
-!!$  real, intent(in) :: Bx !< x-position of corner B
-!!$  real, intent(in) :: By !< y-position of corner B
-!!$  real, intent(in) :: Cx !< x-position of corner C
-!!$  real, intent(in) :: Cy !< y-position of corner C
-!!$  character, intent(in) :: axis1 !< Either 'x' or 'y'
-!!$  real, intent(out) :: Area_positive !< Area on negative side of axis line
-!!$  real, intent(out) :: Area_negative !< Area on positive side of axis line
-!!$  ! Local variables
-!!$  real :: pABx, pABy, pACx, pACy, A0
-!!$  real :: A_half_triangle, A_triangle
-!!$
-!!$  A_triangle=Area_of_triangle(Ax,Ay,Bx,By,Cx,Cy)
-!!$
-!!$  call intercept_of_a_line(Ax,Ay,Bx,By,axis1,pABx, pABy)
-!!$  call intercept_of_a_line(Ax,Ay,Cx,Cy,axis1,pACx, pACy)
-!!$
-!!$  if (axis1=='x')  A0=Ay; !Value used for if statements (deciding up/down vs left/right)
-!!$  if (axis1=='y')  A0=Ax; !Value used for if statements (deciding up/down vs left/right)
-!!$
-!!$  A_half_triangle=Area_of_triangle(Ax,Ay,pABx,pABy,pACx,pACy)
-!!$  if (A0>=0.) then
-!!$    Area_positive= A_half_triangle
-!!$    Area_negative= A_triangle-A_half_triangle
-!!$  else
-!!$    Area_positive= A_triangle-A_half_triangle
-!!$    Area_negative= A_half_triangle
-!!$  endif
-!!$
-!!$end subroutine Area_of_triangle_across_axes
-!!$
-!!$!> Returns the axis intercept of a line AB
-!!$!!
-!!$!! This routine returns the position (x0,y0) at which a line AB intercepts the x or y axis.
-!!$!! The value No_intercept_val is returned when the line does not intercept the axis.
-!!$subroutine intercept_of_a_line(Ax, Ay, Bx, By, axes1, x0, y0)
-!!$  ! Arguments
-!!$  real, intent(in) :: Ax !< x-position of corner A
-!!$  real, intent(in) :: Ay !< y-position of corner A
-!!$  real, intent(in) :: Bx !< x-position of corner B
-!!$  real, intent(in) :: By !< y-position of corner B
-!!$  character, intent(in) :: axes1 !< Either 'x' or 'y'
-!!$  real, intent(out) :: x0 !< x-position of intercept
-!!$  real, intent(out) :: y0 !< y-position of intercept
-!!$  ! Local variables
-!!$  real :: No_intercept_val ! Huge value used to make sure that the intercept is outside the triangle in the parallel case.
-!!$
-!!$  No_intercept_val=100000000000. ! Huge value used to make sure that the intercept is outside the triangle in the parallel case.
-!!$  x0=No_intercept_val
-!!$  y0=No_intercept_val
-!!$
-!!$  if (axes1=='x') then ! x intercept
-!!$    if (Ay.ne.By) then
-!!$      x0=Ax -(((Ax-Bx)/(Ay-By))*Ay)
-!!$      y0=0.
-!!$    endif
-!!$  endif
-!!$
-!!$  if (axes1=='y') then ! y intercept
-!!$    if (Ax.ne.Bx) then
-!!$      x0=0.
-!!$      y0=-(((Ay-By)/(Ax-Bx))*Ax)+Ay
-!!$    endif
-!!$  endif
-!!$end subroutine intercept_of_a_line
-!!$
-!!$!> Calculates the area of a triangle on either side of an axis, if any.
-!!$!!
-!!$!! This routine gives you the area of a triangle on opposite sides of the axis specified.
-!!$!! It also takes care of the special case where the triangle is totally on one side.
-!!$!! This routine calls Area_of_triangle_across_axes to calculate the areas when the triangles are split.
-!!$subroutine divding_triangle_across_axes(Ax, Ay, Bx, By, Cx, Cy, axes1, Area_positive, Area_negative)
-!!$  ! Arguments
-!!$  real, intent(in) :: Ax !< x-position of corner A
-!!$  real, intent(in) :: Ay !< y-position of corner A
-!!$  real, intent(in) :: Bx !< x-position of corner B
-!!$  real, intent(in) :: By !< y-position of corner B
-!!$  real, intent(in) :: Cx !< x-position of corner C
-!!$  real, intent(in) :: Cy !< y-position of corner C
-!!$  character, intent(in) :: axes1 !< Either 'x' or 'y'
-!!$  real, intent(out) :: Area_positive !< Area on negative side of axis line
-!!$  real, intent(out) :: Area_negative !< Area on positive side of axis line
-!!$  ! Local variables
-!!$  real :: A0,B0,C0
-!!$  real A_triangle
-!!$
-!!$  if (axes1=='x') then ! Use the y-coordinates for if statements to see which side of the line you are on
-!!$    A0=Ay
-!!$    B0=By
-!!$    C0=Cy
-!!$  endif
-!!$  if (axes1=='y') then ! Use the y-coordinates for if statements to see which side of the line you are on
-!!$    A0=Ax
-!!$    B0=Bx
-!!$    C0=Cx
-!!$  endif
-!!$
-!!$  A_triangle=Area_of_triangle(Ax,Ay,Bx,By,Cx,Cy)
-!!$  if ((B0*C0)>0.) then ! B and C are on the same side  (and non-zero)
-!!$    if ((A0*B0).ge.0.) then ! all three on the same side (if it equals zero, then A0=0 and the others are not)
-!!$      if ((A0>0.)  .or.  ((A0==0.) .and.  (B0>0.))) then
-!!$        Area_positive= A_triangle
-!!$        Area_negative= 0.
-!!$      else
-!!$        Area_positive= 0.
-!!$        Area_negative= A_triangle
-!!$      endif
-!!$    else  !A is on the opposite side to B and C
-!!$      call Area_of_triangle_across_axes(Ax,Ay,Bx,By,Cx,Cy,axes1,Area_positive, Area_negative)
-!!$    endif
-!!$
-!!$  elseif ((B0*C0)<0.) then !B and C are on the opposite sides
-!!$    if ((A0*B0).ge. 0.) then !C is all alone
-!!$      call Area_of_triangle_across_axes(Cx,Cy,Bx,By,Ax,Ay,axes1,Area_positive, Area_negative)
-!!$    else !B is all alone
-!!$      call Area_of_triangle_across_axes(Bx,By,Cx,Cy,Ax,Ay,axes1,Area_positive, Area_negative)
-!!$    endif
-!!$
-!!$  else  !This is the case when either B or C is equal to zero (or both), A0 could be zero too.
-!!$    if (((A0.eq.0.) .and. (B0.eq.0.)) .and. (C0.eq.0.)) then
-!!$      Area_positive= 0.
-!!$      Area_negative= 0.
-!!$    elseif ((A0*B0<0.)  .or.  (A0*C0<0.)) then    !A, B are on opposite sides, and C is zero.  OR  A, C are on opposite sides, and B is zero.
-!!$      call Area_of_triangle_across_axes(Ax,Ay,Bx,By,Cx,Cy,axes1,Area_positive, Area_negative)
-!!$    elseif (((A0*B0>0.) .or. (A0*C0>0.)) .or. (((abs(A0)>0.) .and. (B0==0.)) .and. (C0==0.))) then
-!!$      if (A0>0.) then
-!!$        Area_positive= A_triangle
-!!$        Area_negative= 0.
-!!$      else
-!!$        Area_positive= 0.
-!!$        Area_negative= A_triangle
-!!$      endif
-!!$
-!!$    elseif (A0.eq. 0.) then   !(one of B,C is zero too)
-!!$      if ((B0>0.) .or. (C0>0.)) then
-!!$        Area_positive= A_triangle
-!!$        Area_negative= 0.
-!!$      elseif ((B0<0.) .or. (C0<0.)) then
-!!$        Area_positive= 0.
-!!$        Area_negative= A_triangle
-!!$      else
-!!$        call error_mesg('KID, iceberg_run', 'Logical error inside triangle dividing routine', FATAL)
-!!$      endif
-!!$    else
-!!$      call error_mesg('KID, iceberg_run', 'Another logical error inside triangle dividing routine', FATAL)
-!!$    endif
-!!$  endif
-!!$end subroutine divding_triangle_across_axes
-!!$
-!!$!> Areas of a triangle divided into quadrants
-!!$!!
-!!$!! This routine takes a triangle, and finds the intersection with the four quadrants.
-!!$subroutine Triangle_divided_into_four_quadrants(Ax, Ay, Bx, By, Cx, Cy, Area_triangle, Area_Q1, Area_Q2 ,Area_Q3 ,Area_Q4)
-!!$  ! Arguments
-!!$  real, intent(in) :: Ax !< x-position of corner A
-!!$  real, intent(in) :: Ay !< y-position of corner A
-!!$  real, intent(in) :: Bx !< x-position of corner B
-!!$  real, intent(in) :: By !< y-position of corner B
-!!$  real, intent(in) :: Cx !< x-position of corner C
-!!$  real, intent(in) :: Cy !< y-position of corner C
-!!$  real, intent(out) :: Area_triangle !< Are of triangle
-!!$  real, intent(out) :: Area_Q1 !< Are in quadrant 1
-!!$  real, intent(out) :: Area_Q2 !< Are in quadrant 2
-!!$  real, intent(out) :: Area_Q3 !< Are in quadrant 2
-!!$  real, intent(out) :: Area_Q4 !< Are in quadrant 4
-!!$  ! Local variables
-!!$  real :: Area_Upper, Area_Lower, Area_Right, Area_Left
-!!$  real :: px, py , qx , qy
-!!$  real :: Area_key_quadrant,Error
-!!$  real :: tol
-!!$  integer :: Key_quadrant
-!!$  integer ::sig_fig
-!!$  integer :: stderrunit
-!!$
-!!$  ! Get the stderr unit number
-!!$  stderrunit = stderr()
-!!$  tol=1.e-10
-!!$
-!!$  Area_triangle=Area_of_triangle(Ax,Ay,Bx,By,Cx,Cy)
-!!$
-!!$  ! Calculating area across axes
-!!$  call divding_triangle_across_axes(Ax,Ay,Bx,By,Cx,Cy,'x',Area_Upper ,Area_Lower)
-!!$  call divding_triangle_across_axes(Ax,Ay,Bx,By,Cx,Cy,'y',Area_Right ,Area_Left)
-!!$
-!!$  ! Decide if the origin is in the triangle. If so, then you have to divide the area 4 ways
-!!$  ! This is done by finding a quadrant where the intersection between the triangle and quadrant forms a new triangle
-!!$  ! (This occurs when on of the sides of the triangle  intersects both the x and y axis)
-!!$  if (point_in_triangle(Ax,Ay,Bx,By,Cx,Cy,0.,0.)) then
-!!$    ! Find a line in the triangle that cuts both axes in/on the triangle
-!!$    call intercept_of_a_line(Ax,Ay,Bx,By,'x',px,py); !x_intercept
-!!$    call intercept_of_a_line(Ax,Ay,Bx,By,'y',qx,qy); !y_intercept
-!!$    ! Note that the 1. here means that we include points on the boundary of the triangle.
-!!$    if (.not.((point_in_interval(Ax,Ay,Bx,By,px,py)) .and. (point_in_interval(Ax,Ay,Bx,By,qx,qy)))) then
-!!$      call intercept_of_a_line(Ax,Ay,Cx,Cy,'x',px,py); !x_intercept
-!!$      call intercept_of_a_line(Ax,Ay,Cx,Cy,'y',qx,qy); !y_intercept
-!!$      if (.not.((point_in_interval(Ax,Ay,Cx,Cy,px,py)) .and. (point_in_interval(Ax,Ay,Cx,Cy,qx,qy)))) then
-!!$        call intercept_of_a_line(Bx,By,Cx,Cy,'x',px,py); !x_intercept
-!!$        call intercept_of_a_line(Bx,By,Cx,Cy,'y',qx,qy); !y_intercept
-!!$        if (.not.((point_in_interval(Bx,By,Cx,Cy,px,py)) .and. (point_in_interval(Bx,By,Cx,Cy,qx,qy)))) then
-!!$          ! You should not get here, but there might be some bugs in the code to do with points exactly falling on axes.
-!!$          !if (mpp_pe().eq.12) then
-!!$            write(stderrunit,*) 'KID,corners', Ax,Ay,Bx,By,Cx,Cy
-!!$          !endif
-!!$          call error_mesg('KID, iceberg_run', 'Something went wrong with Triangle_divide_into_four_quadrants', FATAL)
-!!$        endif
-!!$      endif
-!!$    endif
-!!$
-!!$    ! Assigning quadrants. Key_quadrant is the quadrant with the baby triangle in it.
-!!$    Area_key_quadrant=Area_of_triangle(px,py,qx,qy,0.,0.)
-!!$    if ((px.ge. 0.) .and. (qy.ge. 0.)) then  !First quadrant
-!!$      Key_quadrant=1
-!!$    elseif ((px.lt.0.) .and. (qy.ge. 0.)) then  !Second quadrant
-!!$      Key_quadrant=2
-!!$    elseif ((px.lt. 0.) .and. (qy.lt. 0.)) then !Third quadrant
-!!$      Key_quadrant=3
-!!$    elseif ((px.ge. 0.) .and. (qy.lt. 0.)) then !Forth quadrant
-!!$      Key_quadrant=4
-!!$    else  !
-!!$      call error_mesg('KID, iceberg_run', 'None of the quadrants are Key', WARNING)
-!!$      write(stderrunit,*) 'KID, Triangle, px,qy', px,qy
-!!$    endif
-!!$
-!!$  else ! At least one quadrant is empty, and this can be used to find the areas in the other quadrant.  Assigning quadrants. Key_quadrant is the empty quadrant.
-!!$    Area_key_quadrant=0
-!!$    if      ( (.not. ((((Ax>0.) .and. (Ay>0.)) .or. ((Bx>0.) .and. (By> 0.))) .or. ((Cx>0.) .and. (Cy> 0.)))) .and. ((Area_Upper+Area_Right).le.Area_triangle) ) then
-!!$      ! No points land in this quadrant and triangle does not cross the quadrant
-!!$      Key_quadrant=1
-!!$    elseif  ( (.not. ((((Ax<0.) .and. (Ay>0)) .or. ((Bx<0.) .and. (By>0.))) .or. ((Cx<0.) .and. (Cy>0.)))) .and. ((Area_Upper+Area_Left).le. Area_triangle) ) then
-!!$      Key_quadrant=2
-!!$    elseif  ( (.not. ((((Ax<0.) .and. (Ay<0.)) .or. ((Bx<0.) .and. (By< 0.))) .or. ((Cx<0.) .and. (Cy< 0.)))) .and. ((Area_Lower+Area_Left) .le.Area_triangle) ) then
-!!$      Key_quadrant=3
-!!$    else
-!!$      Key_quadrant=4
-!!$    endif
-!!$  endif
-!!$
-!!$  ! Assign values to quadrants
-!!$  if (Key_quadrant .eq. 1) then
-!!$    Area_Q1=Area_key_quadrant
-!!$    Area_Q2=Area_Upper-Area_Q1
-!!$    Area_Q4=Area_Right-Area_Q1
-!!$    !Area_Q3=Area_Left-Area_Q2 ! These lines have been changes so that the sum of the 4 quadrants exactly matches the triangle area.
-!!$    Area_Q3=Area_triangle-(Area_Q1+Area_Q2+Area_Q4)
-!!$  elseif (Key_quadrant .eq. 2) then
-!!$    Area_Q2=Area_key_quadrant
-!!$    Area_Q1=Area_Upper-Area_Q2
-!!$    Area_Q4=Area_Right-Area_Q1
-!!$    !Area_Q3=Area_Left-Area_Q2
-!!$    Area_Q3=Area_triangle-(Area_Q1+Area_Q2+Area_Q4)
-!!$  elseif (Key_quadrant==3) then
-!!$    Area_Q3=Area_key_quadrant
-!!$    Area_Q2=Area_Left-Area_Q3
-!!$    Area_Q1=Area_Upper-Area_Q2
-!!$    !Area_Q4=Area_Right-Area_Q1
-!!$    Area_Q4=Area_triangle-(Area_Q1+Area_Q2+Area_Q3)
-!!$  elseif (Key_quadrant==4) then
-!!$    Area_Q4=Area_key_quadrant
-!!$    Area_Q1=Area_Right-Area_Q4
-!!$    Area_Q2=Area_Upper-Area_Q1
-!!$    !Area_Q3=Area_Left-Area_Q2
-!!$    Area_Q3=Area_triangle-(Area_Q1+Area_Q2+Area_Q4)
-!!$  else
-!!$    call error_mesg('KID, iceberg_run', 'Logical error inside triangle into four quadrants. Should not get here.', FATAL)
-!!$  endif
-!!$
-!!$  Area_Q1=max(Area_Q1,0.)
-!!$  Area_Q2=max(Area_Q2,0.)
-!!$  Area_Q3=max(Area_Q3,0.)
-!!$  Area_Q4=max(Area_Q4,0.)
-!!$
-!!$
-!!$  Error=abs(Area_Q1+Area_Q2+Area_Q3+Area_Q4-Area_triangle)
-!!$  if (Error>tol) then
-!!$    call error_mesg('KID, triangle spreading', 'Triangle not evaluated accurately!!', WARNING)
-!!$    !if (mpp_pe().eq.mpp_root_pe()) then
-!!$    if (mpp_pe().eq. 20) then
-!!$      write(stderrunit,*) 'KID, Triangle corners:',Ax,Ay,Bx,By,Cx,Cy
-!!$      write(stderrunit,*) 'KID, Triangle, Full Area', Area_Q1+ Area_Q2+ Area_Q3+ Area_Q4
-!!$      write(stderrunit,*) 'KID, Triangle, Areas', Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
-!!$      write(stderrunit,*) 'KID, Triangle, Areas', Error
-!!$      write(stderrunit,*) 'KID, Key quadrant',Key_quadrant,Area_key_quadrant
-!!$      write(stderrunit,*) 'KID, point in triangle',(point_in_triangle(Ax,Ay,Bx,By,Cx,Cy,0.,0.))
-!!$      write(stderrunit,*) 'KID, halves',Area_Upper,Area_Lower,Area_Right,Area_Left
-!!$    endif
-!!$  endif
-!!$
-!!$end subroutine Triangle_divided_into_four_quadrants
-!!$
-!!$!> Rotates a point clockwise about origin and then translates by x0,y0
-!!$subroutine rotate_and_translate(px, py, theta, x0, y0)
-!!$  ! Arguments
-!!$  real, intent(in) :: x0 !< x-direction shift
-!!$  real, intent(in) :: y0 !< y-direction shift
-!!$  real, intent(in) :: theta !< Angle to rotate (degrees)
-!!$  real, intent(inout) :: px !< x-coordinate of point
-!!$  real, intent(inout) :: py !< y-coordinate of point
-!!$  ! Local variables
-!!$  real :: px_temp,py_temp
-!!$
-!!$  ! Rotation
-!!$  px_temp = ( cos(theta*pi/180)*px) + (sin(theta*pi/180)*py)
-!!$  py_temp = (-sin(theta*pi/180)*px) + (cos(theta*pi/180)*py)
-!!$
-!!$  ! Translation
-!!$  px= px_temp + x0
-!!$  py= py_temp + y0
-!!$end subroutine rotate_and_translate
-!!$
-!!$!> Areas of a hexagon divided into quadrants
-!!$!!
-!!$!! This subroutine divides a regular hexagon centered at x0,y0 with apothem H, and orientation theta into its intersection with the 4 quadrants.
-!!$!! Theta=0 assumes that the apothem points upwards.
-!!$!! Routine works by finding the corners of the 6 triangles, and then finding the intersection of each of these with each quadrant.
-!!$!! \todo (also the rotation is not working yet)
-!!$subroutine Hexagon_into_quadrants_using_triangles(x0, y0, H, theta, Area_hex ,Area_Q1, Area_Q2, Area_Q3, Area_Q4)
-!!$  ! Arguments
-!!$  real, intent(in) :: x0 !< x-coordinate of center of hexagon
-!!$  real, intent(in) :: y0 !< y-coordinate of center of hexagon
-!!$  real, intent(in) :: H !< Apothem (inner radius of hexagon)
-!!$  real, intent(in) :: theta !< Orientation angle of hexagon
-!!$  real, intent(out) :: Area_hex !< Area of hexagon
-!!$  real, intent(out) :: Area_Q1 !< Are in quadrant 1
-!!$  real, intent(out) :: Area_Q2 !< Are in quadrant 2
-!!$  real, intent(out) :: Area_Q3 !< Are in quadrant 2
-!!$  real, intent(out) :: Area_Q4 !< Are in quadrant 4
-!!$  ! Local variables
-!!$  real :: C1x, C2x, C3x, C4x, C5x, C6x
-!!$  real :: C1y, C2y, C3y, C4y, C5y, C6y
-!!$  real :: T12_Area, T12_Q1, T12_Q2, T12_Q3, T12_Q4
-!!$  real :: T23_Area, T23_Q1, T23_Q2, T23_Q3, T23_Q4
-!!$  real :: T34_Area, T34_Q1, T34_Q2, T34_Q3, T34_Q4
-!!$  real :: T45_Area, T45_Q1, T45_Q2, T45_Q3, T45_Q4
-!!$  real :: T56_Area, T56_Q1, T56_Q2, T56_Q3, T56_Q4
-!!$  real :: T61_Area, T61_Q1, T61_Q2, T61_Q3, T61_Q4
-!!$  real :: S, exact_hex_area, Error
-!!$  real :: tol
-!!$  integer :: stderrunit
-!!$
-!!$  ! Get the stderr unit number
-!!$  stderrunit = stderr()
-!!$  tol=1.e-10
-!!$
-!!$  ! Length of side of Hexagon
-!!$  S=(2/sqrt(3.))*H
-!!$
-!!$  ! Finding positions of corners
-!!$  C1x=S           ; C1y=0.  !Corner 1 (right)
-!!$  C2x=H/sqrt(3.)  ; C2y=H;  !Corner 2 (top right)
-!!$  C3x=-H/sqrt(3.) ; C3y=H;  !Corner 3 (top left)
-!!$  C4x=-S          ; C4y=0.; !Corner 4 (left)
-!!$  C5x=-H/sqrt(3.) ; C5y=-H; !Corner 5 (bottom left)
-!!$  C6x=H/sqrt(3.)  ; C6y=-H; !Corner 6 (bottom right)
-!!$
-!!$  ! Finding positions of corners
-!!$  call rotate_and_translate(C1x,C1y,theta,x0,y0)
-!!$  call rotate_and_translate(C2x,C2y,theta,x0,y0)
-!!$  call rotate_and_translate(C3x,C3y,theta,x0,y0)
-!!$  call rotate_and_translate(C4x,C4y,theta,x0,y0)
-!!$  call rotate_and_translate(C5x,C5y,theta,x0,y0)
-!!$  call rotate_and_translate(C6x,C6y,theta,x0,y0)
-!!$
-!!$  ! Area of Hexagon is the sum of the triangles
-!!$  call Triangle_divided_into_four_quadrants(x0,y0,C1x,C1y,C2x,C2y,T12_Area,T12_Q1,T12_Q2,T12_Q3,T12_Q4); !Triangle 012
-!!$  call Triangle_divided_into_four_quadrants(x0,y0,C2x,C2y,C3x,C3y,T23_Area,T23_Q1,T23_Q2,T23_Q3,T23_Q4); !Triangle 023
-!!$  call Triangle_divided_into_four_quadrants(x0,y0,C3x,C3y,C4x,C4y,T34_Area,T34_Q1,T34_Q2,T34_Q3,T34_Q4); !Triangle 034
-!!$  call Triangle_divided_into_four_quadrants(x0,y0,C4x,C4y,C5x,C5y,T45_Area,T45_Q1,T45_Q2,T45_Q3,T45_Q4); !Triangle 045
-!!$  call Triangle_divided_into_four_quadrants(x0,y0,C5x,C5y,C6x,C6y,T56_Area,T56_Q1,T56_Q2,T56_Q3,T56_Q4); !Triangle 056
-!!$  call Triangle_divided_into_four_quadrants(x0,y0,C6x,C6y,C1x,C1y,T61_Area,T61_Q1,T61_Q2,T61_Q3,T61_Q4); !Triangle 061
-!!$
-!!$  ! Summing up the triangles
-!!$  Area_hex=T12_Area+T23_Area+T34_Area+T45_Area+T56_Area+T61_Area
-!!$  Area_Q1=T12_Q1+T23_Q1+T34_Q1+T45_Q1+T56_Q1+T61_Q1
-!!$  Area_Q2=T12_Q2+T23_Q2+T34_Q2+T45_Q2+T56_Q2+T61_Q2
-!!$  Area_Q3=T12_Q3+T23_Q3+T34_Q3+T45_Q3+T56_Q3+T61_Q3
-!!$  Area_Q4=T12_Q4+T23_Q4+T34_Q4+T45_Q4+T56_Q4+T61_Q4
-!!$
-!!$  Area_Q1=max(Area_Q1,0.)
-!!$  Area_Q2=max(Area_Q2,0.)
-!!$  Area_Q3=max(Area_Q3,0.)
-!!$  Area_Q4=max(Area_Q4,0.)
-!!$
-!!$  Error=Area_hex-(Area_Q1+Area_Q2+Area_Q3+Area_Q4)
-!!$  if ((abs(Error)>tol))then
-!!$    if (mpp_pe().eq.mpp_root_pe()) then
-!!$      call error_mesg('KID, hexagonal spreading', 'Hexagon error is large!!', WARNING)
-!!$      write(stderrunit,*) 'KID, hex error, H,x0,y0, Error', H, x0 , y0, Error
-!!$      write(stderrunit,*) 'KID, hex error, Areas',Area_hex, (Area_Q1+Area_Q2 + Area_Q3+Area_Q4), Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
-!!$      write(stderrunit,*) 'KID, Triangle1',C1x,C1y,C2x,C2y,T12_Area,T12_Q1,T12_Q2,T12_Q3,T12_Q4,(T12_Q1+T12_Q2+T12_Q3+T12_Q4-T12_Area)
-!!$      write(stderrunit,*) 'KID, Triangle2',C2x,C2y,C3x,C3y,T23_Area,T23_Q1,T23_Q2,T23_Q3,T23_Q4,(T23_Q1+T23_Q2+T23_Q3+T23_Q4-T23_Area)
-!!$      write(stderrunit,*) 'KID, Triangle3',C3x,C3y,C4x,C4y,T34_Area,T34_Q1,T34_Q2,T34_Q3,T34_Q4,(T34_Q1+T34_Q2+T34_Q3+T34_Q4-T34_Area)
-!!$      write(stderrunit,*) 'KID, Triangle4',C4x,C4y,C5x,C5y,T45_Area,T45_Q1,T45_Q2,T45_Q3,T45_Q4,(T45_Q1+T45_Q2+T45_Q3+T45_Q4-T45_Area)
-!!$      write(stderrunit,*) 'KID, Triangle5',C5x,C5y,C6x,C6y,T56_Area,T56_Q1,T56_Q2,T56_Q3,T56_Q4,(T56_Q1+T56_Q2+T56_Q3+T56_Q4-T56_Area)
-!!$      write(stderrunit,*) 'KID, Triangle6',C6x,C6y,C1x,C1y,T61_Area,T61_Q1,T61_Q2,T61_Q3,T61_Q4,(T61_Q1+T61_Q2+T61_Q3+T61_Q4-T61_Area)
-!!$    endif
-!!$  endif
-!!$
-!!$  exact_hex_area=((3.*sqrt(3.)/2)*(S*S))
-!!$  if (abs(Area_hex-exact_hex_area)>tol) then
-!!$    call error_mesg('KID, hexagonal spreading', 'Hexagon not evaluated accurately!!', WARNING)
-!!$    if (mpp_pe().eq.mpp_root_pe()) then
-!!$      write(stderrunit,*) 'KID, hex calculations, H,x0,y0', H, x0 , y0
-!!$      write(stderrunit,*) 'KID, hex calculations, Areas',Area_hex, (Area_Q1+Area_Q2 + Area_Q3+Area_Q4), Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
-!!$    endif
-!!$  endif
-!!$
-!!$  ! Adjust Areas so that the error is zero by subtracting the error from the largest sector.
-!!$   if  (((Area_Q1>=Area_Q2) .and. (Area_Q1>=Area_Q3)) .and. (Area_Q1>=Area_Q4)) then
-!!$     Area_Q1=Area_Q1+Error
-!!$   elseif  (((Area_Q2>=Area_Q1) .and. (Area_Q2>=Area_Q3)) .and. (Area_Q2>=Area_Q4)) then
-!!$     Area_Q2=Area_Q2+Error
-!!$   elseif  (((Area_Q3>=Area_Q1) .and. (Area_Q3>=Area_Q2)) .and. (Area_Q3>=Area_Q4)) then
-!!$     Area_Q3=Area_Q3+Error
-!!$   elseif  (((Area_Q4>=Area_Q1) .and. (Area_Q4>=Area_Q2)) .and. (Area_Q4>=Area_Q3)) then
-!!$     Area_Q4=Area_Q4+Error
-!!$   else
-!!$     call error_mesg('KID, hexagonal spreading', 'Error in hexagon is larger than any quadrant!!', WARNING)
-!!$     if (mpp_pe().eq.mpp_root_pe()) then
-!!$      write(stderrunit,*) 'KID, hex quadrants, H,x0,y0', H, x0 , y0, Error
-!!$      write(stderrunit,*) 'KID, hex quadrants, Areas',Area_hex, (Area_Q1+Area_Q2 + Area_Q3+Area_Q4), Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
-!!$     endif
-!!$   endif
-!!$
-!!$ end subroutine Hexagon_into_quadrants_using_triangles
 
 !> Loop through all bergs and call interp_flds
 subroutine interp_gridded_fields_to_bergs(bergs)
@@ -5280,7 +4425,7 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   real, dimension(:,:), optional, pointer :: ustar_berg !< Friction velocity on base of bergs (m/s)
   real, dimension(:,:), optional, pointer :: area_berg !< Area of bergs (m2)
   real, dimension(:,:), optional, pointer, intent(in)  :: calve_mask        !< Mask for calving of tabular bonded bergs
-  real, dimension(:,:), optional, pointer, intent(in)  :: mass_shelf        !< The ice shelf mass/cell area (kg m-2)
+  real, dimension(:,:), optional, pointer, intent(in)  :: mass_shelf        !< The ice shelf mass/ice shelf area (kg m-2)
   real, dimension(:,:), optional, pointer, intent(in)  :: area_shelf        !< The area of each grid cell covered by
                                                                             !! the ice shelf [m2]
   real, dimension(:,:), optional, pointer :: frac_cberg        !< Cell fraction of partially-calved bonded bergs from
@@ -5358,12 +4503,56 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   if (present(area_berg)) then ;  if (associated(area_berg)) then
     area_berg(:,:)=0.0
   endif ;  endif
-if (present(frac_cberg)) then ;  if (associated(frac_cberg)) then
+  if (present(frac_cberg)) then ;  if (associated(frac_cberg)) then
     frac_cberg(:,:)=0.0
   endif ;  endif
-if (present(frac_cberg_calved)) then ;  if (associated(frac_cberg_calved)) then
+  if (present(frac_cberg_calved)) then ;  if (associated(frac_cberg_calved)) then
     frac_cberg_calved(:,:)=0.0
   endif ;  endif
+
+  ! Initialize fields needed for tabular calving of bonded bergs from ice shelves
+  if (bergs%tabular_calving) then
+    if (.not. (present(calve_mask) .and. present(mass_shelf) .and. present(area_shelf) &
+               .and. present(frac_cberg_calved) .and. present(frac_cberg) )) then
+      call error_mesg('KID, icebergs_run', 'Not all tabular calving variables are not present!', FATAL)
+    else
+      if (.not. (associated(calve_mask) .and. associated(mass_shelf) .and. associated(area_shelf) &
+          .and. associated(frac_cberg_calved) .and. associated(frac_cberg) )) then
+        write(stderrunit,*) 'KID, icebergs_run', 'associated: calve_mask ', associated(calve_mask), &
+          ', mass_shelf ',associated(mass_shelf),', area_shelf ',associated(area_shelf),&
+          ', frac_cberg_calved ',associated(frac_cberg_calved),', frac_cberg ',associated(frac_cberg)
+        call error_mesg('KID, icebergs_run', 'Not all tabular calving variables are associated!', FATAL)
+      endif
+      TC=>bergs%TC
+      TC%calve_mask(grd%isc:grd%iec,grd%jsc:grd%jec) = calve_mask(:,:)
+      !TC%h_shelf is the ice shelf thickness as calculated from ice shelf mass, but using iceberg density
+      !If ice shelf and iceberg density differ, TC%h_shelf will still produce the same basal elevation
+      !(assuming floatation) as  ice shelf thickness calculated using ice shelf density. However, the
+      !respective surface elevations may differ.
+      TC%frac_shelf(grd%isc:grd%iec,grd%jsc:grd%jec) = area_shelf(:,:)/grd%area(grd%isc:grd%iec,grd%jsc:grd%jec)
+
+      !Recall that mass_shelf is in units kg per m2 of ice shelf area
+      TC%h_shelf(grd%isc:grd%iec,grd%jsc:grd%jec) = mass_shelf(:,:) / bergs%rho_bergs
+
+      !correct h_shelf so that it is zero (rather than NaN) where there is no ice shelf
+      do j=grd%jsc,grd%jec ; do i=grd%isc,grd%iec
+        if (TC%frac_shelf(i,j)<=0) TC%h_shelf(i,j) = 0.0
+        if (TC%frac_shelf(i,j)>0) then
+          grd%msk(i,j)=0
+        else
+          grd%msk(i,j)=1
+        endif
+      enddo; enddo
+
+      call mpp_update_domains(TC%calve_mask, grd%domain, complete=.false.)
+      call mpp_update_domains(TC%h_shelf, grd%domain, complete=.false.)
+      call mpp_update_domains(TC%frac_shelf, grd%domain, complete=.false.)
+      call mpp_update_domains(grd%msk, grd%domain, complete=.true.)
+
+      TC%frac_cberg_calved(:,:) = 0.0
+      TC%frac_cberg(:,:) = 0.0
+    endif
+  endif
 
   ! Manage time
   call get_date(time, iyr, imon, iday, ihr, imin, isec)
@@ -5451,7 +4640,11 @@ if (present(frac_cberg_calved)) then ;  if (associated(frac_cberg_calved)) then
       ! Interpolate ocean and ice velocities from C-grid velocity points.
       Iu = i + Iu_off ; ju = j + ju_off ; iv = i + iv_off ; Jv = j + Jv_off
       ! This masking is needed for now to prevent icebergs from running up on to land.
-      mask = min(grd%msk(i,j), grd%msk(i+1,j), grd%msk(i,j+1), grd%msk(i+1,j+1))
+      if (bergs%tabular_calving) then
+        mask=1
+      else
+        mask = min(grd%msk(i,j), grd%msk(i+1,j), grd%msk(i,j+1), grd%msk(i+1,j+1))
+      endif
       grd%uo(I,J) = mask * 0.5*(uo(Iu,ju)+uo(Iu,ju+1))
       grd%ui(I,J) = mask * 0.5*(ui(Iu,ju)+ui(Iu,ju+1))
       grd%vo(I,J) = mask * 0.5*(vo(iv,Jv)+vo(iv+1,Jv))
@@ -5486,7 +4679,11 @@ if (present(frac_cberg_calved)) then ;  if (associated(frac_cberg_calved)) then
     do I=grd%isc-1,grd%iec ; do J=grd%jsc-1,grd%jec
       ! Interpolate wind stresses from C-grid velocity-points.
       ! This masking is needed for now to prevent icebergs from running up on to land.
-      mask = min(grd%msk(i,j), grd%msk(i+1,j), grd%msk(i,j+1), grd%msk(i+1,j+1))
+      if (bergs%tabular_calving) then
+        mask=1
+      else
+        mask = min(grd%msk(i,j), grd%msk(i+1,j), grd%msk(i,j+1), grd%msk(i+1,j+1))
+      endif
        grd%ua(I,J) = mask * 0.5*(uC_tmp(I,j)+uC_tmp(I,j+1))
        grd%va(I,J) = mask * 0.5*(vC_tmp(i,J)+vC_tmp(i+1,J))
     enddo ; enddo
@@ -5503,7 +4700,11 @@ if (present(frac_cberg_calved)) then ;  if (associated(frac_cberg_calved)) then
     do I=grd%isc-1,grd%iec ; do J=grd%jsc-1,grd%jec
       ! Interpolate wind stresses from A-grid tracer points to the corner B-grid points.
       ! This masking is needed for now to prevent icebergs from running up on to land.
-      mask = min(grd%msk(i,j), grd%msk(i+1,j), grd%msk(i,j+1), grd%msk(i+1,j+1))
+      if (bergs%tabular_calving) then
+        mask=1
+      else
+        mask = min(grd%msk(i,j), grd%msk(i+1,j), grd%msk(i,j+1), grd%msk(i+1,j+1))
+      endif
       grd%ua(I,J) = mask * 0.25*((uA_tmp(i,j) + uA_tmp(i+1,j+1)) + &
                                  (uA_tmp(i+1,j) + uA_tmp(i,j+1)))
       grd%va(I,J) = mask * 0.25*((vA_tmp(i,j) + vA_tmp(i+1,j+1)) + &
@@ -5562,49 +4763,10 @@ if (present(frac_cberg_calved)) then ;  if (associated(frac_cberg_calved)) then
     endif
   endif
 
-  ! Initialize fields needed for tabular calving of bonded bergs from ice shelves
-  if (bergs%tabular_calving) then
-    if (.not. (present(calve_mask) .and. present(mass_shelf) .and. present(area_shelf) &
-               .and. present(frac_cberg_calved) .and. present(frac_cberg) )) then
-      call error_mesg('KID, icebergs_run', 'Not all tabular calving variables are not present!', FATAL)
-    else
-      if (.not. (associated(calve_mask) .and. associated(mass_shelf) .and. associated(area_shelf) &
-          .and. associated(frac_cberg_calved) .and. associated(frac_cberg) )) then
-        write(stderrunit,*) 'KID, icebergs_run', 'associated: calve_mask ', associated(calve_mask), &
-          ', mass_shelf ',associated(mass_shelf),', area_shelf ',associated(area_shelf),&
-          ', frac_cberg_calved ',associated(frac_cberg_calved),', frac_cberg ',associated(frac_cberg)
-        call error_mesg('KID, icebergs_run', 'Not all tabular calving variables are associated!', FATAL)
-      endif
-      TC=>bergs%TC
-      TC%calve_mask(grd%isc:grd%iec,grd%jsc:grd%jec) = calve_mask(:,:)
-      !TC%h_shelf is the ice shelf thickness as calculated from ice shelf mass, but using iceberg density
-      !If ice shelf and iceberg density differ, TC%h_shelf will still produce the same basal elevation
-      !(assuming floatation) as  ice shelf thickness calculated using ice shelf density. However, the
-      !respective surface elevations may differ.
-      TC%frac_shelf(grd%isc:grd%iec,grd%jsc:grd%jec) = area_shelf(:,:)/grd%area(grd%isc:grd%iec,grd%jsc:grd%jec)
-
-      !Recall that mass_shelf is in units kg/m2
-      TC%h_shelf(grd%isc:grd%iec,grd%jsc:grd%jec) = mass_shelf(:,:) / (TC%frac_shelf(grd%isc:grd%iec,grd%jsc:grd%jec) * &
-                                                                       bergs%rho_bergs)
-
-      !correct h_shelf so that it is zero (rather than NaN) where there is no ice shelf
-      do i=grd%isc,grd%iec ; do j=grd%jsc,grd%jec
-        if (TC%frac_shelf(i,j)<=0) TC%h_shelf(i,j) = 0.0
-      enddo; enddo
-
-      call mpp_update_domains(TC%calve_mask, grd%domain, complete=.false.)
-      call mpp_update_domains(TC%h_shelf, grd%domain, complete=.false.)
-      call mpp_update_domains(TC%frac_shelf, grd%domain, complete=.true.)
-      print *,'sum(TC%calve_mask)',sum(TC%calve_mask)
-      TC%frac_cberg_calved(:,:) = 0.0
-      TC%frac_cberg(:,:) = 0.0
-    endif
-  endif
-
   ! Make sure that gridded values agree with mask  (to get rid of NaN values)
   do i=grd%isd,grd%ied ; do j=grd%jsd,grd%jed
     ! Initializing all gridded values to zero
-    if (grd%msk(i,j).lt. 0.5) then
+    if ((.not.bergs%tabular_calving) .and. grd%msk(i,j).lt. 0.5) then
       grd%ua(i,j) = 0.0 ;  grd%va(i,j) = 0.0
       grd%uo(i,j) = 0.0 ;  grd%vo(i,j) = 0.0
       grd%ui(i,j) = 0.0 ;  grd%vi(i,j) = 0.0
@@ -5629,9 +4791,8 @@ if (present(frac_cberg_calved)) then ;  if (associated(frac_cberg_calved)) then
   ! Calving of tabular bonded bergs
   ! TODO: does this make sense here?
   if (bergs%tabular_calving) then
-    print *,'pt start'
     call process_tabular_calving(bergs)
-    print *,'pt end'
+    if (bergs%iceberg_bonds_on)  call  bond_address_update(bergs)
     !return gridded variables associated with tabular calving
     frac_cberg_calved(:,:)=TC%frac_cberg_calved(grd%isc:grd%iec,grd%jsc:grd%jec)
     frac_cberg(:,:)       =TC%frac_cberg(grd%isc:grd%iec,grd%jsc:grd%jec)
@@ -5746,7 +4907,7 @@ if (present(frac_cberg_calved)) then ;  if (associated(frac_cberg_calved)) then
   ! Calculate mass on ocean before thermodynamics, to use in melt rate calculation
   if (bergs%find_melt_using_spread_mass) then
     grd%spread_mass_old(:,:)=0.
-    call sum_up_spread_fields(bergs,grd%spread_mass_old(grd%isc:grd%iec,grd%jsc:grd%jec), 'mass')
+    call sum_up_spread_fields(bergs,grd%spread_mass_old(grd%isc:grd%iec,grd%jsc:grd%jec), 'mass', ignore_mask_in=bergs%tabular_calving)
     !Reset fields
     grd%mass_on_ocean(:,:,:)=0.  ;  grd%area_on_ocean(:,:,:)=0.
     grd%Uvel_on_ocean(:,:,:)=0.  ;  grd%Vvel_on_ocean(:,:,:)=0.
@@ -5884,6 +5045,9 @@ if (present(frac_cberg_calved)) then ;  if (associated(frac_cberg_calved)) then
     lerr=send_data(grd%id_chksum, iCount(:,:), Time)
     deallocate( iCount )
   endif
+  if (grd%id_mask>0) &
+    lerr=send_data(grd%id_mask, grd%msk(grd%isc:grd%iec,grd%jsc:grd%jec), Time)
+  !Tabular calving diagnostics
   if (grd%id_calve_mask>0) &
     lerr=send_data(grd%id_calve_mask, TC%calve_mask(grd%isc:grd%iec,grd%jsc:grd%jec), Time)
   if (grd%id_h_shelf>0) &
@@ -5894,6 +5058,8 @@ if (present(frac_cberg_calved)) then ;  if (associated(frac_cberg_calved)) then
     lerr=send_data(grd%id_frac_cberg_calved, TC%frac_cberg_calved(grd%isc:grd%iec,grd%jsc:grd%jec), Time)
   if (grd%id_frac_cberg>0) &
     lerr=send_data(grd%id_frac_cberg, TC%frac_cberg(grd%isc:grd%iec,grd%jsc:grd%jec), Time)
+  if (grd%id_pf_area>0) &
+    lerr=send_data(grd%id_pf_area, TC%saved_pf_area(grd%isc:grd%iec,grd%jsc:grd%jec,:), Time)
 
   ! Dump icebergs to screen
   if (really_debug) call print_bergs(stderrunit,bergs,'icebergs_run, status')
@@ -5978,12 +5144,12 @@ if (present(frac_cberg_calved)) then ;  if (associated(frac_cberg_calved)) then
     grd%tmpc(:,:)=0.
     !Finding spread mass
     call mpp_clock_end(bergs%clock); call mpp_clock_end(bergs%clock_dia) ! To enable calling of public s/r
-    call sum_up_spread_fields(bergs, grd%tmpc, 'mass')
+    call sum_up_spread_fields(bergs, grd%tmpc, 'mass', ignore_mask_in=bergs%tabular_calving)
     call mpp_clock_begin(bergs%clock_dia); call mpp_clock_begin(bergs%clock) ! To enable calling of public s/r
     bergs%returned_mass_on_ocean=sum( grd%tmpc(grd%isc:grd%iec,grd%jsc:grd%jec)*grd%area(grd%isc:grd%iec,grd%jsc:grd%jec) )
     !Finding spread area
     call mpp_clock_end(bergs%clock); call mpp_clock_end(bergs%clock_dia) ! To enable calling of public s/r
-    call sum_up_spread_fields(bergs, grd%tmpc, 'area')
+    call sum_up_spread_fields(bergs, grd%tmpc, 'area', ignore_mask_in=bergs%tabular_calving)
     call mpp_clock_begin(bergs%clock_dia); call mpp_clock_begin(bergs%clock) ! To enable calling of public s/r
     bergs%returned_area_on_ocean=sum( grd%tmpc(grd%isc:grd%iec,grd%jsc:grd%jec)*grd%area(grd%isc:grd%iec,grd%jsc:grd%jec) )
     bergs%nbergs_end=count_bergs(bergs)
@@ -6334,93 +5500,6 @@ subroutine icebergs_incr_mass(bergs, mass, Time)
   call mpp_clock_end(bergs%clock)
 
 end subroutine icebergs_incr_mass
-
-!!$!> Sums up a berg property into a gridded field
-!!$subroutine sum_up_spread_fields(bergs, field, field_name, ignore_mask_in)
-!!$  ! Arguments
-!!$  type(icebergs), pointer :: bergs !< Container for all types and memory
-!!$  real, dimension(bergs%grd%isc:bergs%grd%iec,bergs%grd%jsc:bergs%grd%jec), intent(out) :: field !< Gridded field
-!!$  character(len=4), intent(in) :: field_name !< Name of field to grid
-!!$  logical, intent(in), optional :: ignore_mask_in !< Do not mask where grid area or mask = 0. Needed for frac_cberg_calved and frac_cberg variables.
-!!$  ! Local variables
-!!$  integer :: i, j
-!!$  type(icebergs_gridded), pointer :: grd
-!!$  real :: dmda
-!!$  logical :: lerr, ignore_mask
-!!$  real, dimension(bergs%grd%isd:bergs%grd%ied, bergs%grd%jsd:bergs%grd%jed,9) :: var_on_ocean   !Variable being spread onto the ocean  (mass, area, Uvel, Vvel)
-!!$  integer :: stderrunit
-!!$
-!!$  if (present(ignore_mask_in)) then
-!!$    ignore_mask=ignore_mask_in
-!!$  else
-!!$    ignore_mask=.false.
-!!$  endif
-!!$
-!!$  ! Get the stderr unit number
-!!$  stderrunit = stderr()
-!!$  ! For convenience
-!!$  grd=>bergs%grd
-!!$
-!!$  field(:,:)=0.
-!!$
-!!$  !Deciding which varibale to spread across cells across grid cells
-!!$  if (field_name=='mass') var_on_ocean(:,:,:)=grd%mass_on_ocean(:,:,:)
-!!$  if (field_name=='area') var_on_ocean(:,:,:)=grd%area_on_ocean(:,:,:)
-!!$  if (field_name=='Uvel') var_on_ocean(:,:,:)=grd%Uvel_on_ocean(:,:,:)
-!!$  if (field_name=='Vvel') var_on_ocean(:,:,:)=grd%Vvel_on_ocean(:,:,:)
-!!$  if (field_name=='frac_cberg_calved') var_on_ocean(:,:,:)=grd%frac_cberg_calved(:,:,:)
-!!$  if (field_name=='frac_cberg')        var_on_ocean(:,:,:)=grd%frac_cberg(:,:,:)
-!!$  if (field_name=='pf_area')           var_on_ocean(:,:,:)=grd%pf_area(:,:,:)
-!!$
-!!$  !This line has been removed, for that routine can be used for other fields
-!!$  !if (.not. bergs%add_weight_to_ocean) return
-!!$
-!!$  !Update the halos of the var_on_ocean
-!!$  call mpp_update_domains(var_on_ocean, grd%domain)
-!!$
-!!$  !Rotatine when old_bug_rotated_weights is on  - we should remove this.
-!!$  if (.not. old_bug_rotated_weights) then
-!!$    do j=grd%jsd, grd%jed; do i=grd%isd, grd%ied
-!!$      if (grd%parity_x(i,j)<0.) then
-!!$        ! This block assumes both parity_x and parity_y are negative
-!!$        ! (i.e. a 180 degree rotation). In general, we should handle
-!!$        ! +/- 90 degree rotations as well but in CM2*-class models
-!!$        ! this is not necessary. -aja
-!!$        dmda=var_on_ocean(i,j,9); var_on_ocean(i,j,9)=var_on_ocean(i,j,1); var_on_ocean(i,j,1)=dmda
-!!$        dmda=var_on_ocean(i,j,8); var_on_ocean(i,j,8)=var_on_ocean(i,j,2); var_on_ocean(i,j,2)=dmda
-!!$        dmda=var_on_ocean(i,j,7); var_on_ocean(i,j,7)=var_on_ocean(i,j,3); var_on_ocean(i,j,3)=dmda
-!!$        dmda=var_on_ocean(i,j,6); var_on_ocean(i,j,6)=var_on_ocean(i,j,4); var_on_ocean(i,j,4)=dmda
-!!$      endif
-!!$    enddo; enddo
-!!$  endif
-!!$
-!!$  !Here we add the contribution of the 9 cells. This is the heart of the routine.
-!!$  do j=grd%jsc, grd%jec; do i=grd%isc, grd%iec
-!!$    dmda=var_on_ocean(i,j,5) &
-!!$         + ( ( (var_on_ocean(i-1,j-1,9)+var_on_ocean(i+1,j+1,1))   &
-!!$         +     (var_on_ocean(i+1,j-1,7)+var_on_ocean(i-1,j+1,3)) ) &
-!!$         +   ( (var_on_ocean(i-1,j  ,6)+var_on_ocean(i+1,j  ,4))   &
-!!$         +     (var_on_ocean(i  ,j-1,8)+var_on_ocean(i  ,j+1,2)) ) )
-!!$    if (grd%area(i,j)>0) dmda=dmda/grd%area(i,j)
-!!$    if (.not. ignore_mask) dmda=dmda*grd%msk(i,j)
-!!$
-!!$    !Make sure that area <=1.0
-!!$    if (field_name=='area') dmda=min(dmda,1.0)
-!!$
-!!$    field(i,j)=dmda
-!!$  enddo; enddo
-!!$
-!!$  if (debug) then
-!!$    grd%tmp(:,:)=0.; grd%tmp(grd%isc:grd%iec,grd%jsc:grd%jec)=field
-!!$    if (field_name=='mass') then
-!!$      call grd_chksum3(grd, grd%mass_on_ocean, 'mass bergs (incr)')
-!!$      call grd_chksum2(grd, grd%tmp, 'mass out (incr)')
-!!$    elseif (field_name=='area') then
-!!$      call grd_chksum3(grd, grd%area_on_ocean, 'area bergs (incr)')
-!!$      call grd_chksum2(grd, grd%tmp, 'area out (incr)')
-!!$    endif
-!!$ endif
-!!$end subroutine sum_up_spread_fields
 
 !> Adds calving (from driver) to the coastal "buckets"
 subroutine accumulate_calving(bergs)
@@ -7516,7 +6595,7 @@ subroutine verlet_stepping(bergs,berg, axn, ayn, bxn, byn, uveln, vveln, rx, ry)
   dt=bergs%dt
   dt_2=0.5*dt
 
-  orientation=bergs%initial_orientation
+  orientation=bergs%initial_orientation*(pi/180)
   if ((bergs%iceberg_bonds_on) .and. (bergs%rotate_icebergs_for_mass_spreading)) call find_orientation_using_iceberg_bonds(grd,berg,orientation)
 
   lonn = berg%lon ;   latn = berg%lat

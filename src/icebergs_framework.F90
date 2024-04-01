@@ -19,7 +19,7 @@ use time_manager_mod, only: time_type, get_date, get_time, set_date, operator(-)
 implicit none ; private
 
 integer :: buffer_width=34 ! This should be a parameter
-integer :: buffer_width_traj=32 ! This should be a parameter
+integer :: buffer_width_traj=30 ! This should be a parameter
 integer :: buffer_width_bond_traj=11 !This should be a parameter
 integer, parameter :: nclasses=10 ! Number of ice bergs classes
 
@@ -111,9 +111,9 @@ public break_bonds_on_sub_steps, skip_first_outer_mts_step, no_frac_first_ts
 public hexagon_into_quadrants_using_triangles, Area_of_triangle, point_in_triangle
 public point_in_interval, point_is_on_the_line
 public ij_component_of_id, spread_variable_across_cells, sum_up_spread_fields
-public initialize_iceberg_bonds
+public initialize_iceberg_bonds, find_orientation_using_iceberg_bonds
 public convert_from_grid_to_meters, convert_from_meters_to_grid
-public update_halo_calved_tabular_icebergs
+public update_halo_calved_tabular_icebergs, delete_all_bonds
 
 !> Container for gridded fields
 type :: icebergs_gridded
@@ -233,9 +233,9 @@ type :: icebergs_gridded
   integer :: id_count=-1, id_chksum=-1, id_u_iceberg=-1, id_v_iceberg=-1, id_sss=-1, id_ustar_iceberg
   integer :: id_spread_uvel=-1, id_spread_vvel=-1
   integer :: id_melt_m_per_year=-1
-  integer :: id_ocean_depth=-1, id_ice_sheet_basins=-1, id_melt_by_ice_sheet_basin=-1
+  integer :: id_ocean_depth=-1, id_mask=-1, id_ice_sheet_basins=-1, id_melt_by_ice_sheet_basin=-1
   integer :: id_melt_by_class=-1, id_melt_buoy_fl=-1, id_melt_eros_fl=-1, id_melt_conv_fl=-1
-  integer :: id_fl_parent_melt=-1, id_fl_child_melt=-1
+  integer :: id_fl_parent_melt=-1, id_fl_child_melt=-1, id_pf_area=-1
   integer :: id_calve_mask=-1, id_h_shelf=-1, id_frac_shelf=-1, id_frac_cberg_calved=-1, id_frac_cberg=-1
   !>@}
 
@@ -662,6 +662,9 @@ type :: tabular_calving_state
     frac_shelf => NULL(), &        !< The fraction of each grid cell covered by ice shelf [nondim]
     frac_cberg_calved => NULL(), & !< Cell fraction of fully-calved bonded bergs from the ice sheet [nondim]
     frac_cberg => NULL()           !< Cell fraction of partially-calved bonded bergs from the ice sheet [nondim]
+
+  real, pointer, dimension(:,:,:) :: &
+    saved_pf_area => NULL()        !< Cell fraction of partially-calved and partially-full bergs that are x bonds away from a full berg
 
   integer, pointer, dimension(:,:) :: &
     c_id => NULL()             !! integer field to identify each unique tabular iceberg
@@ -1337,9 +1340,9 @@ endif
 if (save_short_traj) buffer_width_traj=6 ! This is the length of the short buffer used for abrevated traj
 if (save_fl_traj) then
   if (footloose) then
-    buffer_width_traj=buffer_width_traj+8+2
+    buffer_width_traj=buffer_width_traj+7+3
   else
-    buffer_width_traj=buffer_width_traj+4+2
+    buffer_width_traj=buffer_width_traj+7
   endif
 endif
 if (ignore_traj) buffer_width_traj=0 ! If this is true, then all traj files should be ignored
@@ -1775,6 +1778,8 @@ endif
      'Melt rate of footloose parent bergs', 'kg/(m^2*s)')
   grd%id_fl_child_melt=register_diag_field('icebergs', 'fl_child_melt', axes, Time, &
      'Melt rate of footloose child bergs', 'kg/(m^2*s)')
+  grd%id_mask=register_diag_field('icebergs', 'mask', axes, Time, &
+     'wet point mask for icebergs', 'none')
   if (bergs%tabular_calving) then
     grd%id_calve_mask=register_diag_field('icebergs', 'calve_mask', axes, Time, &
        'Mask for tabular calving (calve if >=1)', 'none')
@@ -1786,6 +1791,8 @@ endif
        'Cell fraction of fully-calved tabular bonded bergs', 'none')
     grd%id_frac_cberg=register_diag_field('icebergs', 'frac_cberg', axes, Time, &
        'Cell fraction of partially-calved tabular bonded bergs', 'none')
+    grd%id_pf_area=register_diag_field('icebergs', 'pf_area', axes3d, Time, &
+       'Cell fraction of partially-calved and partially-full bergs that are x bonds away from a full berg', 'none')
   endif
   ! Static fields
   id_class=register_static_field('icebergs', 'lon', axes, &
@@ -1797,9 +1804,9 @@ endif
   id_class=register_static_field('icebergs', 'area', axes, &
                'cell area', 'm^2')
   if (id_class>0) lerr=send_data(id_class, grd%area(grd%isc:grd%iec,grd%jsc:grd%jec))
-  id_class=register_static_field('icebergs', 'mask', axes, &
-               'wet point mask', 'none')
-  if (id_class>0) lerr=send_data(id_class, grd%msk(grd%isc:grd%iec,grd%jsc:grd%jec))
+  ! id_class=register_static_field('icebergs', 'mask', axes, &
+  !              'wet point mask', 'none')
+  ! if (id_class>0) lerr=send_data(id_class, grd%msk(grd%isc:grd%iec,grd%jsc:grd%jec))
   id_class=register_static_field('icebergs', 'ocean_depth_static', axes, &
                'ocean depth static', 'm')
   if (id_class>0) lerr=send_data(id_class, grd%ocean_depth(grd%isc:grd%iec,grd%jsc:grd%jec))
@@ -4133,8 +4140,8 @@ subroutine pack_traj_into_buffer2(traj, buff, n, save_short_traj, save_fl_traj)
     call push_buffer_value(buff%data(:,n),counter,traj%mass_of_bits)
     call push_buffer_value(buff%data(:,n),counter,traj%uvel)
     call push_buffer_value(buff%data(:,n),counter,traj%vvel)
+    call push_buffer_value(buff%data(:,n),counter,traj%mass_scaling)
     if (footloose) then
-      call push_buffer_value(buff%data(:,n),counter,traj%mass_scaling)
       call push_buffer_value(buff%data(:,n),counter,traj%mass_of_fl_bits)
       call push_buffer_value(buff%data(:,n),counter,traj%mass_of_fl_bergy_bits)
       call push_buffer_value(buff%data(:,n),counter,traj%fl_k)
@@ -4231,8 +4238,8 @@ subroutine unpack_traj_from_buffer2(first, buff, n, save_short_traj, save_fl_tra
     call pull_buffer_value(buff%data(:,n),counter,traj%mass_of_bits)
     call pull_buffer_value(buff%data(:,n),counter,traj%uvel)
     call pull_buffer_value(buff%data(:,n),counter,traj%vvel)
+    call pull_buffer_value(buff%data(:,n),counter,traj%mass_scaling)
     if (footloose) then
-      call pull_buffer_value(buff%data(:,n),counter,traj%mass_scaling)
       call pull_buffer_value(buff%data(:,n),counter,traj%mass_of_fl_bits)
       call pull_buffer_value(buff%data(:,n),counter,traj%mass_of_fl_bergy_bits)
       call pull_buffer_value(buff%data(:,n),counter,traj%fl_k)
@@ -5221,6 +5228,32 @@ type(bond), pointer :: prev,next,current_bond
   deallocate(bond_to_delete)
 end subroutine delete_bond_from_list
 
+!> Deletes all bonds associated with an iceberg
+subroutine delete_all_bonds(berg)
+type(iceberg), intent(in), pointer :: berg !<parent berg to delete associated bonds
+type(iceberg), pointer :: other_berg
+type(bond), pointer :: current_bond, matching_bond, kick_the_bucket
+
+current_bond=>berg%first_bond
+do while (associated(current_bond))
+  if (associated(current_bond%other_berg)) then
+    other_berg=>current_bond%other_berg
+    matching_bond=>other_berg%first_bond
+    do while (associated(matching_bond))  ! Looping over possible matching bonds in other_berg
+      if (matching_bond%other_id .eq. berg%id) then
+        call delete_bond_from_list(other_berg,matching_bond)
+        matching_bond=>null()
+      else
+        matching_bond=>matching_bond%next_bond
+      endif
+    enddo
+  endif
+  kick_the_bucket=>current_bond
+  current_bond=>current_bond%next_bond
+  call delete_bond_from_list(berg,kick_the_bucket)
+enddo
+end subroutine delete_all_bonds
+
 !> Bond two bergs together
 subroutine form_a_bond(berg, other_id, other_berg_ine, other_berg_jne, other_berg)
 ! Arguments
@@ -5806,8 +5839,8 @@ endif
           posn%mass_of_bits=this%mass_of_bits
           posn%uvel=this%uvel
           posn%vvel=this%vvel
+          posn%mass_scaling=this%mass_scaling
           if (bergs%footloose) then
-            posn%mass_scaling=this%mass_scaling
             posn%mass_of_fl_bits=this%mass_of_fl_bits
             posn%mass_of_fl_bergy_bits=this%mass_of_fl_bergy_bits
             posn%fl_k=this%fl_k
@@ -8010,7 +8043,7 @@ subroutine sum_up_spread_fields(bergs, field, field_name, ignore_mask_in)
          +     (var_on_ocean(i+1,j-1,7)+var_on_ocean(i-1,j+1,3)) ) &
          +   ( (var_on_ocean(i-1,j  ,6)+var_on_ocean(i+1,j  ,4))   &
          +     (var_on_ocean(i  ,j-1,8)+var_on_ocean(i  ,j+1,2)) ) )
-    if (grd%area(i,j)>0) dmda=dmda/grd%area(i,j)
+    if (grd%area(i,j)>0 .and. (.not. trim(field_name)=='pf_area')) dmda=dmda/grd%area(i,j)
     if (.not. ignore_mask) dmda=dmda*grd%msk(i,j)
 
     !Make sure that area <=1.0
@@ -8410,20 +8443,92 @@ subroutine Triangle_divided_into_four_quadrants(Ax, Ay, Bx, By, Cx, Cy, Area_tri
 
 end subroutine Triangle_divided_into_four_quadrants
 
+!> Returns orientation of a berg determined by its bonds
+subroutine find_orientation_using_iceberg_bonds(grd, berg, orientation)
+  ! Arguments
+  type(icebergs_gridded), pointer :: grd !< Container for gridded fields
+  type(iceberg), pointer :: berg !< Berg for which orientation is needed
+  real, intent(inout) :: orientation !< Angle of orientation (radians)
+  ! Local variables
+  type(iceberg), pointer :: other_berg
+  type(bond), pointer :: current_bond
+  real :: angle, lat1,lat2,lon1,lon2,dlat,dlon
+  real :: r_dist_x, r_dist_y
+  real :: lat_ref, dx_dlon, dy_dlat
+  real :: theta, bond_count, Average_angle
+
+  bond_count=0.
+  Average_angle=0.
+  !Don't check orientation of the edges of halo,  since they can contain unassosiated bonds  (this is why halo width must be larger >= 2 to use bonds)
+  if  (  ((berg%ine .gt.  grd%isd) .and. (berg%ine .lt. grd%ied)) .and. ((berg%jne .ge.  grd%jsd) .and. (berg%jne .le. grd%jed) ) ) then
+    current_bond=>berg%first_bond
+    lat1=berg%lat
+    lon1=berg%lon
+    do while (associated(current_bond)) ! loop over all bonds
+      other_berg=>current_bond%other_berg
+      if (.not. associated(other_berg)) then !good place for debugging
+        !One valid option: current iceberg is on the edge of halo, with other berg on the next pe (not influencing mass spreading)
+        !print *, 'Iceberg bond details:',berg%id, current_bond%other_id,berg%halo_berg, mpp_pe()
+        !print *, 'Iceberg bond details2:',berg%ine, berg%jne, current_bond%other_berg_ine, current_bond%other_berg_jne
+        !print *, 'Iceberg isd,ied,jsd,jed:',grd%isd, grd%ied, grd%jsd, grd%jed
+        !print *, 'Iceberg isc,iec,jsc,jec:',grd%isc, grd%iec, grd%jsc, grd%jec
+        !call error_mesg('KID,calculating orientation', 'Looking at bond interactions of unassosiated berg!' ,FATAL)
+        !endif
+      else
+        lat2=other_berg%lat
+        lon2=other_berg%lon
+
+        dlat=lat2-lat1
+        dlon=lon2-lon1
+
+        lat_ref=0.5*(lat1+lat2)
+        call convert_from_grid_to_meters(lat_ref,grd%grid_is_latlon,dx_dlon,dy_dlat)
+        r_dist_x=dlon*dx_dlon
+        r_dist_y=dlat*dy_dlat
+
+        if (r_dist_x .eq. 0.) then
+          angle=pi/2.
+        else
+          angle=atan(r_dist_y/r_dist_x)
+          !angle= ((pi/2.)  - (orientation))  - angle
+          angle= pi/2.-angle
+          !print *, 'angle: ', angle*(180/pi), initial_orientation
+          angle=modulo(angle ,pi/3.)
+        endif
+        bond_count=bond_count+1.
+        Average_angle=Average_angle+angle
+      endif
+      current_bond=>current_bond%next_bond
+    enddo  !End loop over bonds
+    if (bond_count.gt.0) then
+      Average_angle =Average_angle/bond_count
+    else
+      Average_angle =0.
+    endif
+    orientation=modulo(Average_angle ,pi/3.)
+  endif
+
+end subroutine find_orientation_using_iceberg_bonds
+
 !> Rotates a point clockwise about origin and then translates by x0,y0
 subroutine rotate_and_translate(px, py, theta, x0, y0)
   ! Arguments
   real, intent(in) :: x0 !< x-direction shift
   real, intent(in) :: y0 !< y-direction shift
-  real, intent(in) :: theta !< Angle to rotate (degrees)
+  !real, intent(in) :: theta !< Angle to rotate (degrees, clockwise is positive)
+  real, intent(in) :: theta !< Angle to rotate radians, clockwise is positive)
   real, intent(inout) :: px !< x-coordinate of point
   real, intent(inout) :: py !< y-coordinate of point
   ! Local variables
   real :: px_temp,py_temp
 
-  ! Rotation
-  px_temp = ( cos(theta*pi/180)*px) + (sin(theta*pi/180)*py)
-  py_temp = (-sin(theta*pi/180)*px) + (cos(theta*pi/180)*py)
+  ! Rotation (theta in degrees)
+  !px_temp = ( cos(theta*pi/180)*px) + (sin(theta*pi/180)*py)
+  !py_temp = (-sin(theta*pi/180)*px) + (cos(theta*pi/180)*py)
+
+  ! Rotation (theta in radians)
+  px_temp = ( cos(theta)*px) + (sin(theta)*py)
+  py_temp = (-sin(theta)*px) + (cos(theta)*py)
 
   ! Translation
   px= px_temp + x0
@@ -8441,7 +8546,7 @@ subroutine Hexagon_into_quadrants_using_triangles(x0, y0, H, theta, Area_hex ,Ar
   real, intent(in) :: x0 !< x-coordinate of center of hexagon
   real, intent(in) :: y0 !< y-coordinate of center of hexagon
   real, intent(in) :: H !< Apothem (inner radius of hexagon)
-  real, intent(in) :: theta !< Orientation angle of hexagon
+  real, intent(in) :: theta !< Orientation angle of hexagon (radians)
   real, intent(out) :: Area_hex !< Area of hexagon
   real, intent(out) :: Area_Q1 !< Are in quadrant 1
   real, intent(out) :: Area_Q2 !< Are in quadrant 2

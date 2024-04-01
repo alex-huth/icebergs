@@ -1695,7 +1695,7 @@ integer :: iret, ncid, i_dim, i
 integer :: lonid, latid, yearid, dayid, uvelid, vvelid, idcntid, idijid
 integer :: uvelpid,vvelpid
 integer :: uoid, void, uiid, viid, uaid, vaid, sshxid, sshyid, sstid, sssid
-integer :: cnid, hiid, hsid
+integer :: cnid, hiid, hsid, sbid
 integer :: mid, smid, did, wid, lid, mbid, mflbid, mflbbid, hdid, nbid, odid, flkid
 integer :: axnid,aynid,bxnid,bynid,axnfid,aynfid,bxnfid,bynfid, msid
 integer :: avid, aaid, rid, baid
@@ -1824,8 +1824,8 @@ integer :: ntrajs_sent_io,ntrajs_rcvd_io
         mbid = inq_varid(ncid, 'mass_of_bits')
         uvelid = inq_varid(ncid, 'uvel')
         vvelid = inq_varid(ncid, 'vvel')
+        msid = inq_varid(ncid, 'mass_scaling')
         if (footloose) then
-          msid = inq_varid(ncid, 'mass_scaling')
           mflbid = inq_varid(ncid, 'mass_of_fl_bits')
           mflbbid = inq_varid(ncid, 'mass_of_fl_bergy_bits')
           flkid = inq_varid(ncid, 'fl_k')
@@ -1856,6 +1856,7 @@ integer :: ntrajs_sent_io,ntrajs_rcvd_io
         bxnid = inq_varid(ncid, 'bxn')
         bynid = inq_varid(ncid, 'byn')
         hsid = inq_varid(ncid, 'halo_berg')
+        sbid = inq_varid(ncid, 'static_berg')
         odid = inq_varid(ncid, 'od')
 
         if (mts) then
@@ -1898,8 +1899,8 @@ integer :: ntrajs_sent_io,ntrajs_rcvd_io
         mbid = def_var(ncid, 'mass_of_bits', NF_DOUBLE, i_dim)
         uvelid = def_var(ncid, 'uvel', NF_DOUBLE, i_dim)
         vvelid = def_var(ncid, 'vvel', NF_DOUBLE, i_dim)
+        msid = def_var(ncid, 'mass_scaling', NF_DOUBLE, i_dim)
         if (footloose) then
-          msid = def_var(ncid, 'mass_scaling', NF_DOUBLE, i_dim)
           mflbid = def_var(ncid, 'mass_of_fl_bits', NF_DOUBLE, i_dim)
           mflbbid = def_var(ncid, 'mass_of_fl_bergy_bits', NF_DOUBLE, i_dim)
           flkid = def_var(ncid, 'fl_k', NF_DOUBLE, i_dim)
@@ -1930,6 +1931,7 @@ integer :: ntrajs_sent_io,ntrajs_rcvd_io
         bxnid = def_var(ncid, 'bxn', NF_DOUBLE, i_dim)
         bynid = def_var(ncid, 'byn', NF_DOUBLE, i_dim)
         hsid = def_var(ncid, 'halo_berg', NF_DOUBLE, i_dim)
+        sbid = def_var(ncid, 'static_berg', NF_DOUBLE, i_dim)
         odid = def_var(ncid, 'od', NF_DOUBLE, i_dim)
 
         if (mts) then
@@ -1982,9 +1984,9 @@ integer :: ntrajs_sent_io,ntrajs_rcvd_io
         call put_att(ncid, uvelid, 'units', 'm/s')
         call put_att(ncid, vvelid, 'long_name', 'meridional spped')
         call put_att(ncid, vvelid, 'units', 'm/s')
+        call put_att(ncid, msid, 'long_name', 'mass_scaling')
+        call put_att(ncid, msid, 'units', 'dimensionless')
         if (footloose) then
-          call put_att(ncid, msid, 'long_name', 'mass_scaling')
-          call put_att(ncid, msid, 'units', 'dimensionless')
           call put_att(ncid, mflbid, 'long_name', 'mass_of_fl_bits')
           call put_att(ncid, mflbid, 'units', 'kg')
           call put_att(ncid, mflbbid, 'long_name', 'mass_of_fl_bergy_bits')
@@ -2038,6 +2040,8 @@ integer :: ntrajs_sent_io,ntrajs_rcvd_io
         call put_att(ncid, bynid, 'units', 'm')
         call put_att(ncid, hsid, 'long_name', 'halo status')
         call put_att(ncid, hsid, 'units', 'non-dim')
+        call put_att(ncid, sbid, 'long_name', 'static berg status')
+        call put_att(ncid, sbid, 'units', 'non-dim')
         call put_att(ncid, odid, 'long_name', 'ocean_depth')
         call put_att(ncid, odid, 'units', 'm')
 
@@ -2103,8 +2107,8 @@ integer :: ntrajs_sent_io,ntrajs_rcvd_io
         call put_double(ncid, mbid, i, this%mass_of_bits)
         call put_double(ncid, uvelid, i, this%uvel)
         call put_double(ncid, vvelid, i, this%vvel)
+        call put_double(ncid, msid, i, this%mass_scaling)
         if (footloose) then
-          call put_double(ncid, msid, i, this%mass_scaling)
           call put_double(ncid, mflbid, i, this%mass_of_fl_bits)
           call put_double(ncid, mflbbid, i, this%mass_of_fl_bergy_bits)
           call put_double(ncid, flkid, i, this%fl_k)
@@ -2135,6 +2139,7 @@ integer :: ntrajs_sent_io,ntrajs_rcvd_io
         call put_double(ncid, bxnid, i, this%bxn)
         call put_double(ncid, bynid, i, this%byn)
         call put_double(ncid, hsid, i, this%halo_berg)
+        call put_double(ncid, sbid, i, this%static_berg)
         call put_double(ncid, odid, i, this%od)
 
         if (mts) then

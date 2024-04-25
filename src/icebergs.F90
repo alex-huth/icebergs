@@ -3321,7 +3321,6 @@ integer i,j
 integer :: grdi, grdj
 real :: Hocean, Dn,Tn,dvo, mass_tmp
 real :: ustar_h, ustar
-real :: orientation
 real :: ave_thickness, ave_draft
 real, dimension(bergs%grd%isd:bergs%grd%ied,bergs%grd%jsd:bergs%grd%jed)  :: spread_mass_tmp
 real :: tmp
@@ -3769,7 +3768,7 @@ subroutine spread_mass_across_ocean_cells(bergs, berg, i, j, x, y, Mberg, Mbits,
   real :: xL, xC, xR, yD, yC, yU, Mass, L
   real :: yDxL, yDxC, yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR
   real :: S, H, origin_x, origin_y, x0, y0
-  real :: Area_Q1,Area_Q2 , Area_Q3,Area_Q4, Area_hex
+  real :: Area_Q1,Area_Q2 , Area_Q3,Area_Q4, Area_hex, Area_square
   real :: fraction_used !fraction of iceberg mass included (part of the mass near the boundary is discarded sometimes)
   real :: I_fraction_used !Inverse of fraction used
   real :: tol
@@ -3819,6 +3818,7 @@ subroutine spread_mass_across_ocean_cells(bergs, berg, i, j, x, y, Mberg, Mbits,
   yUxL=0.  ; yUxC=0. ; yUxR=0. ; yCxC=1.
 
   if (.not. bergs%hexagonal_icebergs) then ! Treat icebergs as rectangles of size L: (this is the default)
+                                           ! and squares during spreading to cells
 
     ! L is the non dimensional length of the iceberg [ L=(Area of berg/ Area of grid cell)^0.5 ] or something like that.
     if (grd%area(i,j)>0) then
@@ -3827,52 +3827,127 @@ subroutine spread_mass_across_ocean_cells(bergs, berg, i, j, x, y, Mberg, Mbits,
       L=1.
     endif
 
-    if (bergs%use_old_spreading) then
-      ! Old version before icebergs were given size L
-      xL=min(0.5, max(0., 0.5-x))
-      xR=min(0.5, max(0., x-0.5))
-      xC=max(0., 1.-(xL+xR))
-      yD=min(0.5, max(0., 0.5-y))
-      yU=min(0.5, max(0., y-0.5))
-      yC=max(0., 1.-(yD+yU))
+    if ((bergs%iceberg_bonds_on) .and. (bergs%rotate_icebergs_for_mass_spreading)) then
+      if (bergs%dem) then
+        orientation=bergs%initial_orientation*(pi/180)+berg%rot
+      else
+        call find_orientation_using_iceberg_bonds(grd,berg,orientation,square_berg=.true.)
+      endif
+
+      !Subtracting the position of the nearest corner from x,y  (The mass will then be spread over the 4 cells connected to that corner)
+      origin_x=1. ; origin_y=1.
+      if (x<0.5) origin_x=0.
+      if (y<0.5) origin_y=0.
+
+      !Position of the square center, relative to origin at the nearest vertex
+      x0=(x-origin_x)
+      y0=(y-origin_y)
+
+      call Square_into_quadrants_using_triangles(x0,y0,L,orientation,Area_square, Area_Q1, Area_Q2, Area_Q3, Area_Q4)
+
+      if (min(min(Area_Q1,Area_Q2),min(Area_Q3, Area_Q4)) <-tol) then
+        call error_mesg('KID, square spreading', 'Intersection with square should not be negative!!!', WARNING)
+        write(stderrunit,*) 'KID, yU,yC,yD', Area_Q1, Area_Q2, Area_Q3, Area_Q4
+      endif
+
+      Area_Q1=Area_Q1/Area_square
+      Area_Q2=Area_Q2/Area_square
+      Area_Q3=Area_Q3/Area_square
+      Area_Q4=Area_Q4/Area_square
+
+      !Now, you decide which quadrant belongs to which mass on ocean cell.
+      if ((x.ge. 0.5) .and. (y.ge. 0.5)) then !Top right vertex
+        yUxR=Area_Q1
+        yUxC=Area_Q2
+        yCxC=Area_Q3
+        yCxR=Area_Q4
+      elseif ((x .lt. 0.5) .and. (y.ge. 0.5)) then  !Top left vertex
+        yUxC=Area_Q1
+        yUxL=Area_Q2
+        yCxL=Area_Q3
+        yCxC=Area_Q4
+      elseif ((x.lt.0.5) .and. (y.lt. 0.5)) then !Bottom left vertex
+        yCxC=Area_Q1
+        yCxL=Area_Q2
+        yDxL=Area_Q3
+        yDxC=Area_Q4
+      elseif ((x.ge.0.5) .and. (y.lt. 0.5)) then!Bottom right vertex
+        yCxR=Area_Q1
+        yCxC=Area_Q2
+        yDxC=Area_Q3
+        yDxR=Area_Q4
+      endif
+
+      !Double check that all the mass is being used.
+      if ((abs(yCxC-(1.-( ((yDxL+yUxR)+(yDxR+yUxL)) + ((yCxL+yCxR)+(yDxC+yUxC)) )))>tol) .and. (mpp_pe().eq. mpp_root_pe())) then
+        write(stderrunit,*) 'KID, square, H,x0,y0', H, x0 , y0
+        write(stderrunit,*) 'KID, square, Areas',(Area_Q1+Area_Q2 + Area_Q3+Area_Q4), Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
+        debug=.True.
+        call error_mesg('KID, square spreading', 'All the mass is not being used!!!', FATAL)
+      endif
+
+      !Scale each cell by (1/fraction_used) in order to redisribute ice mass which landed up on the land, back into the ocean
+      !Note that for the square elements, the mass has already been reassigned, so fraction_used shoule be equal to 1 aready
+      fraction_used= ((yDxL*grd%msk(i-1,j-1)) + (yDxC*grd%msk(i  ,j-1))  +(yDxR*grd%msk(i+1,j-1)) +(yCxL*grd%msk(i-1,j  )) +  (yCxR*grd%msk(i+1,j  ))&
+        +(yUxL*grd%msk(i-1,j+1)) +(yUxC*grd%msk(i  ,j+1))   +(yUxR*grd%msk(i+1,j+1)) + (yCxC**grd%msk(i,j)))
+      if  (berg%static_berg .ge. 1)  fraction_used=1.  !Static icebergs do not share their mass with the boundary
+
     else
-      xL=min(0.5, max(0., 0.5-(x/L)))
-      xR=min(0.5, max(0., (x/L)+(0.5-(1/L) )))
-      xC=max(0., 1.-(xL+xR))
-      yD=min(0.5, max(0., 0.5-(y/L)))
-      yU=min(0.5, max(0., (y/L)+(0.5-(1/L) )))
-      yC=max(0., 1.-(yD+yU))
+      !no bonds or rotation for mass spreading. Assume orientation = 0. Before bonding for square particles was introduced (Huth et al 2021), this was the default
+
+      if (bergs%use_old_spreading) then
+        ! Old version before icebergs were given size L
+        xL=min(0.5, max(0., 0.5-x))
+        xR=min(0.5, max(0., x-0.5))
+        xC=max(0., 1.-(xL+xR))
+        yD=min(0.5, max(0., 0.5-y))
+        yU=min(0.5, max(0., y-0.5))
+        yC=max(0., 1.-(yD+yU))
+      else
+        xL=min(0.5, max(0., 0.5-(x/L)))
+        xR=min(0.5, max(0., (x/L)+(0.5-(1/L) )))
+        xC=max(0., 1.-(xL+xR))
+        yD=min(0.5, max(0., 0.5-(y/L)))
+        yU=min(0.5, max(0., (y/L)+(0.5-(1/L) )))
+        yC=max(0., 1.-(yD+yU))
+      endif
+
+      if (berg%static_berg<2) then
+        !non-tabular-calving bergs
+        yDxL=yD*xL*grd%msk(i-1,j-1)
+        yDxC=yD*xC*grd%msk(i  ,j-1)
+        yDxR=yD*xR*grd%msk(i+1,j-1)
+        yCxL=yC*xL*grd%msk(i-1,j  )
+        yCxR=yC*xR*grd%msk(i+1,j  )
+        yUxL=yU*xL*grd%msk(i-1,j+1)
+        yUxC=yU*xC*grd%msk(i  ,j+1)
+        yUxR=yU*xR*grd%msk(i+1,j+1)
+      else
+        !tabular-calving bergs
+        yDxL=yD*xL
+        yDxC=yD*xC
+        yDxR=yD*xR
+        yCxL=yC*xL
+        yCxR=yC*xR
+        yUxL=yU*xL
+        yUxC=yU*xC
+        yUxR=yU*xR
+      endif
+      yCxC=1.-( ((yDxL+yUxR)+(yDxR+yUxL)) + ((yCxL+yCxR)+(yDxC+yUxC)) )
+
+      fraction_used=1. ! rectangular bergs do share mass with boundaries (all mass is included in cells)
     endif
-
-    if (berg%static_berg<2) then
-      !non-tabular-calving bergs
-    yDxL=yD*xL*grd%msk(i-1,j-1)
-    yDxC=yD*xC*grd%msk(i  ,j-1)
-    yDxR=yD*xR*grd%msk(i+1,j-1)
-    yCxL=yC*xL*grd%msk(i-1,j  )
-    yCxR=yC*xR*grd%msk(i+1,j  )
-    yUxL=yU*xL*grd%msk(i-1,j+1)
-    yUxC=yU*xC*grd%msk(i  ,j+1)
-    yUxR=yU*xR*grd%msk(i+1,j+1)
-  else
-    !tabular-calving bergs
-    yDxL=yD*xL
-    yDxC=yD*xC
-    yDxR=yD*xR
-    yCxL=yC*xL
-    yCxR=yC*xR
-    yUxL=yU*xL
-    yUxC=yU*xC
-    yUxR=yU*xR
-  endif
-    yCxC=1.-( ((yDxL+yUxR)+(yDxR+yUxL)) + ((yCxL+yCxR)+(yDxC+yUxC)) )
-
-    fraction_used=1. ! rectangular bergs do share mass with boundaries (all mass is included in cells)
 
   else ! Spread mass as if elements area hexagonal
 
     orientation=bergs%initial_orientation*(pi/180)
-    if ((bergs%iceberg_bonds_on) .and. (bergs%rotate_icebergs_for_mass_spreading)) call find_orientation_using_iceberg_bonds(grd,berg,orientation)
+    if ((bergs%iceberg_bonds_on) .and. (bergs%rotate_icebergs_for_mass_spreading)) then
+      if (bergs%dem) then
+        orientation=bergs%initial_orientation*(pi/180)+berg%rot
+      else
+        call find_orientation_using_iceberg_bonds(grd,berg,orientation)
+      endif
+    endif
 
     if (grd%area(i,j)>0) then
       H=min(( (sqrt(Area/(2.*sqrt(3.))) / sqrt(grd%area(i,j)))),1.) ! Non-dimensionalize element length by grid area. (This gives the non-dim Apothem of the hexagon)
@@ -4573,10 +4648,10 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
         endif
       enddo; enddo
 
-      call mpp_update_domains(TC%calve_mask, grd%domain, complete=.false.)
-      call mpp_update_domains(TC%h_shelf, grd%domain, complete=.false.)
-      call mpp_update_domains(TC%frac_shelf, grd%domain, complete=.false.)
-      call mpp_update_domains(grd%msk, grd%domain, complete=.true.)
+      call mpp_update_domains(TC%calve_mask, grd%domain)!, complete=.false.)
+      call mpp_update_domains(TC%h_shelf, grd%domain)!, complete=.false.)
+      call mpp_update_domains(TC%frac_shelf, grd%domain)!, complete=.false.)
+      call mpp_update_domains(grd%msk, grd%domain)!, complete=.true.)
 
       TC%frac_cberg_calved(:,:) = 0.0
       TC%frac_cberg(:,:) = 0.0
@@ -4817,16 +4892,6 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   if (debug) call bergs_chksum(bergs, 'run bergs (top)')
   if (debug) call checksum_gridded(bergs%grd, 'top of s/r run')
 
-  ! Calving of tabular bonded bergs
-  ! TODO: does this make sense here?
-  if (bergs%tabular_calving) then
-    call process_tabular_calving(bergs)
-    if (bergs%iceberg_bonds_on)  call  bond_address_update(bergs)
-    !return gridded variables associated with tabular calving
-    frac_cberg_calved(:,:)=TC%frac_cberg_calved(grd%isc:grd%iec,grd%jsc:grd%jec)
-    frac_cberg(:,:)       =TC%frac_cberg(grd%isc:grd%iec,grd%jsc:grd%jec)
-  endif
-
   ! Accumulate ice from calving
   call accumulate_calving(bergs)
   if (grd%id_accum>0) then
@@ -4868,7 +4933,7 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   call mpp_clock_begin(bergs%clock_mom)
 
   if (.not.bergs%Static_icebergs) then
-
+  call assign_n_bonds(bergs) ! for debugging tabular calving!
     if (bergs%mts) then
       call evolve_icebergs_mts(bergs)
     else
@@ -4894,6 +4959,18 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   ! Footloose mechanism part 1: calve the child icebergs
   if (bergs%footloose) call footloose_calving(bergs, time)
   call mpp_clock_end(bergs%clock_fl1)
+
+
+  ! Calving of tabular bonded bergs
+  ! TODO: does this make sense here?
+  if (bergs%tabular_calving) then
+    call process_tabular_calving(bergs)
+    if (bergs%iceberg_bonds_on)  call  bond_address_update(bergs)
+    !return gridded variables associated with tabular calving
+    frac_cberg_calved(:,:)=TC%frac_cberg_calved(grd%isc:grd%iec,grd%jsc:grd%jec)
+    frac_cberg(:,:)       =TC%frac_cberg(grd%isc:grd%iec,grd%jsc:grd%jec)
+  endif
+
 
   call mpp_clock_begin(bergs%clock_com2)
   if (bergs%mts) then
@@ -6617,7 +6694,6 @@ subroutine verlet_stepping(bergs,berg, axn, ayn, bxn, byn, uveln, vveln, rx, ry)
   real :: xdot3, ydot3
   real :: xdotn, ydotn
   real :: dt, dt_2, dt_6, dydl
-  real :: orientation
   logical :: bounced, on_tangential_plane, error_flag
   integer :: i, j
   integer :: stderrunit
@@ -6639,9 +6715,6 @@ subroutine verlet_stepping(bergs,berg, axn, ayn, bxn, byn, uveln, vveln, rx, ry)
   ! Common constants
   dt=bergs%dt
   dt_2=0.5*dt
-
-  orientation=bergs%initial_orientation*(pi/180)
-  if ((bergs%iceberg_bonds_on) .and. (bergs%rotate_icebergs_for_mass_spreading)) call find_orientation_using_iceberg_bonds(grd,berg,orientation)
 
   lonn = berg%lon ;   latn = berg%lat
   axn  = berg%axn ;   ayn  = berg%ayn

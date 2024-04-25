@@ -2247,6 +2247,25 @@ logical :: halo_debugging
 
   call mpp_sync_self()
 
+
+  ! Step 1: Clear the current halos
+  call mpp_sync_self()
+  do grdj = grd%jsd,grd%jsc-1 ;  do grdi = grd%isd,grd%ied
+    call delete_all_bergs_in_list(bergs, grdj, grdi, tabular_calving_only=.true.)
+  enddo ; enddo
+
+  do grdj = grd%jec+1,grd%jed ;  do grdi = grd%isd,grd%ied
+    call delete_all_bergs_in_list(bergs, grdj, grdi, tabular_calving_only=.true.)
+  enddo ; enddo
+
+  do grdj = grd%jsd,grd%jed ;    do grdi = grd%isd,grd%isc-1
+    call delete_all_bergs_in_list(bergs, grdj, grdi, tabular_calving_only=.true.)
+  enddo ; enddo
+
+  do grdj = grd%jsd,grd%jed ;    do grdi = grd%iec+1,grd%ied
+    call delete_all_bergs_in_list(bergs, grdj, grdi, tabular_calving_only=.true.)
+  enddo ; enddo
+
   ! Step 2: Updating the halos  - This code is mostly copied from send_to_other_pes
 
   ! Find number of bergs that headed east/west
@@ -2257,7 +2276,7 @@ logical :: halo_debugging
     this=>bergs%list(grdi,grdj)%first
     do while (associated(this))
     !write(stderrunit,*)  'sending east', this%id, this%ine, this%jne, mpp_pe()
-      if (this%static_berg<2) then
+      if (this%static_berg>=0) then ! .and. this%static_berg<2) then
         this=>this%next
       else
         kick_the_bucket=>this
@@ -2275,7 +2294,7 @@ logical :: halo_debugging
   do grdj = grd%jsc,grd%jec ; do grdi = grd%isc,grd%isc+halo_width-1
     this=>bergs%list(grdi,grdj)%first
     do while (associated(this))
-      if (this%static_berg<2) then
+      if (this%static_berg>=0) then ! .and. this%static_berg<2) then
         this=>this%next
       else
         kick_the_bucket=>this
@@ -2349,7 +2368,7 @@ logical :: halo_debugging
   do grdj = grd%jec-halo_width+2,grd%jec ; do grdi = grd%isd,grd%ied
     this=>bergs%list(grdi,grdj)%first
     do while (associated(this))
-      if (this%static_berg<2) then
+      if (this%static_berg>=0) then! .and. this%static_berg<2) then
         this=>this%next
       else
         kick_the_bucket=>this
@@ -2367,7 +2386,7 @@ logical :: halo_debugging
   do grdj = grd%jsc,grd%jsc+halo_width-1 ; do grdi = grd%isd,grd%ied
     this=>bergs%list(grdi,grdj)%first
     do while (associated(this))
-      if (this%static_berg<2) then
+      if (this%static_berg>=0) then! .and. this%static_berg<2) then
         this=>this%next
       else
         kick_the_bucket=>this
@@ -3296,17 +3315,30 @@ end subroutine mts_send_and_receive
 
 
 !> Destroys all bergs in a list
-subroutine delete_all_bergs_in_list(bergs, grdj, grdi)
+subroutine delete_all_bergs_in_list(bergs, grdj, grdi, tabular_calving_only)
   type(icebergs), pointer :: bergs !< Container for all types and memory
   integer :: grdi !< i-index of list
   integer :: grdj !< j-index of list
+  logical, optional :: tabular_calving_only !< true to only delete tabular bergs that are calving from the ice shelf
   ! Local variables
   type(iceberg), pointer :: kick_the_bucket, this
+  logical :: new_tab_only
+
+  if (present(tabular_calving_only)) then
+    new_tab_only=tabular_calving_only
+  else
+    new_tab_only=.false.
+  endif
+
   this=>bergs%list(grdi,grdj)%first
   do while (associated(this))
-    kick_the_bucket=>this
-    this=>this%next
-    call destroy_iceberg(kick_the_bucket)
+    if (new_tab_only .and. this%static_berg>=0) then! .and. this%static_berg<2) then
+      this=>this%next
+    else
+      kick_the_bucket=>this
+      this=>this%next
+      call destroy_iceberg(kick_the_bucket)
+    endif
    !call delete_iceberg_from_list(bergs%list(grdi,grdj)%first,kick_the_bucket)
   enddo
   bergs%list(grdi,grdj)%first=>null()
@@ -4972,24 +5004,36 @@ real :: dist
 end subroutine orig_bond_length
 
 !> Save number of bonds on element
-subroutine assign_n_bonds(bergs)
+subroutine assign_n_bonds(bergs, tabular_calving_only)
 type(icebergs), pointer :: bergs !< Container for all types and memory
+logical, optional :: tabular_calving_only !< Skip assigning number of bonds except for calving tabular bergs
 type(iceberg), pointer :: this, other_berg
 type(bond) , pointer :: current_bond
 type(icebergs_gridded), pointer :: grd
 integer :: grdi, grdj
+logical :: new_tab_only
+
+if (present(tabular_calving_only)) then
+  new_tab_only=tabular_calving_only
+else
+  new_tab_only=.false.
+endif
 
   grd=>bergs%grd
   do grdj=grd%jsd,grd%jed ; do grdi=grd%isd,grd%ied !loop over all cells
     this=>bergs%list(grdi,grdj)%first
     do while (associated(this)) ! loop over all bergs in cell
-      this%n_bonds=0
-      current_bond=>this%first_bond
-      do while (associated(current_bond)) ! loop over all bonds
-        this%n_bonds=this%n_bonds+1
-        current_bond=>current_bond%next_bond
-      enddo
-      this=>this%next
+      if (new_tab_only .and. this%static_berg>=0) then
+        this=>this%next
+      else
+        this%n_bonds=0
+        current_bond=>this%first_bond
+        do while (associated(current_bond)) ! loop over all bonds
+          this%n_bonds=this%n_bonds+1
+          current_bond=>current_bond%next_bond
+        enddo
+        this=>this%next
+      endif
     enddo
   enddo;enddo
 end subroutine assign_n_bonds
@@ -5344,10 +5388,11 @@ type(bond) , pointer :: current_bond
 end subroutine show_all_bonds
 
 !> Sweep across all bergs filling in bond data
-subroutine connect_all_bonds(bergs, ignore_unmatched, match_bond_pairs)
+subroutine connect_all_bonds(bergs, ignore_unmatched, match_bond_pairs, tabular_calving_only)
 type(icebergs), pointer :: bergs !< Container for all types and memory
 logical,optional :: ignore_unmatched !< If true, do not call error if the other berg in a bond is not found
 logical,optional :: match_bond_pairs !< If true, point identical bonds (bond pairs) to each other
+logical,optional :: tabular_calving_only !< If true, only bond tabular bergs that are calving from the ice shelf
 ! Local variables
 type(iceberg), pointer :: other_berg, berg
 type(icebergs_gridded), pointer :: grd
@@ -5356,6 +5401,7 @@ integer :: grdi, grdj
 integer :: grdi_inner, grdj_inner
 type(bond) , pointer :: current_bond, other_bond
 logical :: bond_matched, missing_bond, check_bond_quality,check_match,link_bond_pairs
+logical :: new_tab_only !if true, only bond tabular bergs that are calving from the ice shelf
 integer nbonds
 
   check_match = .true.
@@ -5365,6 +5411,10 @@ integer nbonds
   link_bond_pairs=.false.
   if (present(match_bond_pairs)) then
     if (match_bond_pairs) link_bond_pairs=.true.
+  endif
+  new_tab_only=.false.
+  if (present(tabular_calving_only)) then
+    if (tabular_calving_only) new_tab_only=.true.
   endif
 
 missing_bond=.false.
@@ -5380,6 +5430,7 @@ bond_matched=.false.
 ! do grdj = grd%jsc,grd%jec ; do grdi = grd%isc,grd%iec  ! Don't connect halo bergs
     berg=>bergs%list(grdi,grdj)%first
     do while (associated(berg)) ! loop over all bergs
+      if (new_tab_only .and. berg%static_berg>=0) then; berg=>berg%next; cycle; endif
       current_bond=>berg%first_bond
       do while (associated(current_bond)) ! loop over all bonds
         !code to find parter bond goes here
@@ -5469,7 +5520,7 @@ bond_matched=.false.
     enddo
   enddo;enddo
 
-  if (debug) then
+  if (debug .and. (.not. new_tab_only)) then
     check_bond_quality=.true.
     nbonds=0
     call count_bonds(bergs, nbonds,check_bond_quality)
@@ -5479,6 +5530,7 @@ bond_matched=.false.
     do grdj = grd%jsd+1,grd%jed ; do grdi = grd%isd+1,grd%ied
       berg=>bergs%list(grdi,grdj)%first
       do while (associated(berg)) ! loop over all bergs
+      if (new_tab_only .and. berg%static_berg>=0) then; berg=>berg%next; cycle; endif
         if (berg%halo_berg.ne.10) then
           current_bond=>berg%first_bond
           do while (associated(current_bond)) ! loop over all bonds
@@ -5553,10 +5605,11 @@ subroutine update_latlon(bergs)
 end subroutine update_latlon
 
 !> Counts (and error checks) bonds
-subroutine count_bonds(bergs, number_of_bonds, check_bond_quality)
+subroutine count_bonds(bergs, number_of_bonds, check_bond_quality, tabular_calving_only)
 type(icebergs), pointer :: bergs !< Container for all types and memory
 integer, intent(out) :: number_of_bonds !< Number of bonds
 logical, intent(inout), optional :: check_bond_quality !< If true, check bond quality
+logical,optional :: tabular_calving_only !< If true, only bond tabular bergs that are calving from the ice shelf
 ! Local variables
 type(iceberg), pointer :: berg
 type(iceberg), pointer :: other_berg
@@ -5569,12 +5622,17 @@ logical :: quality_check
 integer :: num_unmatched_bonds,num_unmatched_bonds_all_pe
 integer :: num_unassosiated_bond_pairs, num_unassosiated_bond_pairs_all_pe
 integer :: stderrunit
+logical :: new_tab_only !if true, only check bonds for tabular bergs that are calving from the ice shelf
 
 !  print *, "starting bond_check"
  stderrunit = stderr()
  quality_check=.false.
  if(present(check_bond_quality)) quality_check = check_bond_quality
  check_bond_quality=.false.
+ new_tab_only=.false.
+ if (present(tabular_calving_only)) then
+   if (tabular_calving_only) new_tab_only=.true.
+ endif
  num_unmatched_bonds=0
  num_unassosiated_bond_pairs=0
 
@@ -5584,8 +5642,8 @@ integer :: stderrunit
   number_of_bonds=0  ! This is a bond counter.
   do grdj = grd%jsc,grd%jec ; do grdi = grd%isc,grd%iec
     berg=>bergs%list(grdi,grdj)%first
-    do while (associated(berg)) ! loop over all bergs
-
+    do while (associated(berg)) ! loop over all berg
+      if (new_tab_only .and. berg%static_berg>=0) then; berg=>berg%next; cycle; endif
       current_bond=>berg%first_bond
       do while (associated(current_bond)) ! loop over all bonds
         number_of_bonds=number_of_bonds+1
@@ -5634,7 +5692,7 @@ integer :: stderrunit
     number_of_bonds_all_pe=number_of_bonds
     call mpp_sum(number_of_bonds_all_pe)
 
-    bergs%nbonds=number_of_bonds_all_pe !Total number of bonds across all pe's
+    if (.not. new_tab_only) bergs%nbonds=number_of_bonds_all_pe !Total number of bonds across all pe's
     if (debug) then
       if (number_of_bonds .gt. 0) then
         write(stderrunit,*) "Bonds on PE:",number_of_bonds, "Total bonds", number_of_bonds_all_PE, "on PE number:",  mpp_pe()
@@ -5658,7 +5716,13 @@ integer :: stderrunit
       endif
       if ((num_unmatched_bonds_all_pe .eq. 0)  .and. (num_unassosiated_bond_pairs_all_pe .eq. 0)) then
         if (mpp_pe().eq.mpp_root_pe()) then
-                write(stderrunit,*)  "Total number of bonds is: ", number_of_bonds_all_PE, "All iceberg bonds are connected and working well"
+          if (new_tab_only) then
+            write(stderrunit,*)  "Total number of bonds (new calving only) is: ", number_of_bonds_all_PE, &
+              "All iceberg bonds (new calving only) are connected and working well"
+          else
+            write(stderrunit,*)  "Total number of bonds is: ", number_of_bonds_all_PE, &
+              "All iceberg bonds are connected and working well"
+          endif
         endif
         check_bond_quality=.true.
       else
@@ -8251,11 +8315,11 @@ subroutine Triangle_divided_into_four_quadrants(Ax, Ay, Bx, By, Cx, Cy, Area_tri
   real, intent(in) :: By !< y-position of corner B
   real, intent(in) :: Cx !< x-position of corner C
   real, intent(in) :: Cy !< y-position of corner C
-  real, intent(out) :: Area_triangle !< Are of triangle
-  real, intent(out) :: Area_Q1 !< Are in quadrant 1
-  real, intent(out) :: Area_Q2 !< Are in quadrant 2
-  real, intent(out) :: Area_Q3 !< Are in quadrant 2
-  real, intent(out) :: Area_Q4 !< Are in quadrant 4
+  real, intent(out) :: Area_triangle !< Area of triangle
+  real, intent(out) :: Area_Q1 !< Area in quadrant 1
+  real, intent(out) :: Area_Q2 !< Area in quadrant 2
+  real, intent(out) :: Area_Q3 !< Area in quadrant 2
+  real, intent(out) :: Area_Q4 !< Area in quadrant 4
   ! Local variables
   real :: Area_Upper, Area_Lower, Area_Right, Area_Left
   real :: px, py , qx , qy
@@ -8381,18 +8445,26 @@ subroutine Triangle_divided_into_four_quadrants(Ax, Ay, Bx, By, Cx, Cy, Area_tri
 end subroutine Triangle_divided_into_four_quadrants
 
 !> Returns orientation of a berg determined by its bonds
-subroutine find_orientation_using_iceberg_bonds(grd, berg, orientation)
+subroutine find_orientation_using_iceberg_bonds(grd, berg, orientation, square_berg)
   ! Arguments
   type(icebergs_gridded), pointer :: grd !< Container for gridded fields
   type(iceberg), pointer :: berg !< Berg for which orientation is needed
   real, intent(inout) :: orientation !< Angle of orientation (radians)
+  logical, optional :: square_berg !< True for square bergs, false (default) for hexagonal
   ! Local variables
   type(iceberg), pointer :: other_berg
   type(bond), pointer :: current_bond
+  logical :: square ! True for square bergs, false (default) for hexagonal
   real :: angle, lat1,lat2,lon1,lon2,dlat,dlon
   real :: r_dist_x, r_dist_y
   real :: lat_ref, dx_dlon, dy_dlat
   real :: theta, bond_count, Average_angle
+
+  if (present(square_berg)) then
+    square=square_berg
+  else
+    square=.false.
+  endif
 
   bond_count=0.
   Average_angle=0.
@@ -8430,7 +8502,11 @@ subroutine find_orientation_using_iceberg_bonds(grd, berg, orientation)
           !angle= ((pi/2.)  - (orientation))  - angle
           angle= pi/2.-angle
           !print *, 'angle: ', angle*(180/pi), initial_orientation
-          angle=modulo(angle ,pi/3.)
+          if (square) then
+            angle=modulo(angle ,pi/2.)
+          else
+            angle=modulo(angle ,pi/3.)
+          endif
         endif
         bond_count=bond_count+1.
         Average_angle=Average_angle+angle
@@ -8442,7 +8518,11 @@ subroutine find_orientation_using_iceberg_bonds(grd, berg, orientation)
     else
       Average_angle =0.
     endif
-    orientation=modulo(Average_angle ,pi/3.)
+    if (square) then
+      orientation=modulo(Average_angle ,pi/2.)
+    else
+      orientation=modulo(Average_angle ,pi/3.)
+    endif
   endif
 
 end subroutine find_orientation_using_iceberg_bonds
@@ -8471,6 +8551,111 @@ subroutine rotate_and_translate(px, py, theta, x0, y0)
   px= px_temp + x0
   py= py_temp + y0
 end subroutine rotate_and_translate
+
+!> Areas of a squares divided into quadrants
+!!
+!! This subroutine divides a regular square centered at x0,y0 with length L, and orientation theta into its intersection with the 4 quadrants.
+!! Theta=0 assumes that the length points upwards.
+!! Routine works by finding the corners of the 4 triangles, and then finding the intersection of each of these with each quadrant.
+subroutine Square_into_quadrants_using_triangles(x0, y0, L, theta, Area_square ,Area_Q1, Area_Q2, Area_Q3, Area_Q4)
+  ! Arguments
+  real, intent(in) :: x0 !< x-coordinate of center of square
+  real, intent(in) :: y0 !< y-coordinate of center of square
+  real, intent(in) :: L !< Length of square)
+  real, intent(in) :: theta !< Orientation angle of square (radians)
+  real, intent(out) :: Area_square !< Area of square
+  real, intent(out) :: Area_Q1 !< Are in quadrant 1
+  real, intent(out) :: Area_Q2 !< Are in quadrant 2
+  real, intent(out) :: Area_Q3 !< Are in quadrant 2
+  real, intent(out) :: Area_Q4 !< Are in quadrant 4
+  ! Local variables
+  real :: C1x, C2x, C3x, C4x
+  real :: C1y, C2y, C3y, C4y
+  real :: T12_Area, T12_Q1, T12_Q2, T12_Q3, T12_Q4
+  real :: T23_Area, T23_Q1, T23_Q2, T23_Q3, T23_Q4
+  real :: T34_Area, T34_Q1, T34_Q2, T34_Q3, T34_Q4
+  real :: T41_Area, T41_Q1, T41_Q2, T41_Q3, T41_Q4
+  real :: L2, exact_square_area, Error
+  real :: tol
+  integer :: stderrunit
+
+  ! Get the stderr unit number
+  stderrunit = stderr()
+  tol=1.e-10
+
+  ! Half-length of square
+  L2=0.5*L
+
+  ! Finding positions of corners
+  C1x= L2 ; C1y= L2 !Corner 1 (top right)
+  C2x=-L2 ; C2y= L2 !Corner 2 (top left)
+  C3x=-L2 ; C3y=-L2 !Corner 3 (bottom left)
+  C1x= L2 ; C1y=-L2 !Corner 4 (bottom right)
+
+  ! Finding positions of corners
+  call rotate_and_translate(C1x,C1y,theta,x0,y0)
+  call rotate_and_translate(C2x,C2y,theta,x0,y0)
+  call rotate_and_translate(C3x,C3y,theta,x0,y0)
+  call rotate_and_translate(C4x,C4y,theta,x0,y0)
+
+  ! Area of Square is the sum of the triangles
+  call Triangle_divided_into_four_quadrants(x0,y0,C1x,C1y,C2x,C2y,T12_Area,T12_Q1,T12_Q2,T12_Q3,T12_Q4) !Triangle 012
+  call Triangle_divided_into_four_quadrants(x0,y0,C2x,C2y,C3x,C3y,T23_Area,T23_Q1,T23_Q2,T23_Q3,T23_Q4) !Triangle 023
+  call Triangle_divided_into_four_quadrants(x0,y0,C3x,C3y,C4x,C4y,T34_Area,T34_Q1,T34_Q2,T34_Q3,T34_Q4) !Triangle 034
+  call Triangle_divided_into_four_quadrants(x0,y0,C4x,C4y,C1x,C1y,T41_Area,T41_Q1,T41_Q2,T41_Q3,T41_Q4) !Triangle 041
+
+  ! Summing up the triangles
+  Area_square=T12_Area+T23_Area+T34_Area+T41_Area
+  Area_Q1=T12_Q1+T23_Q1+T34_Q1+T41_Q1
+  Area_Q2=T12_Q2+T23_Q2+T34_Q2+T41_Q2
+  Area_Q3=T12_Q3+T23_Q3+T34_Q3+T41_Q3
+  Area_Q4=T12_Q4+T23_Q4+T34_Q4+T41_Q4
+
+  Area_Q1=max(Area_Q1,0.)
+  Area_Q2=max(Area_Q2,0.)
+  Area_Q3=max(Area_Q3,0.)
+  Area_Q4=max(Area_Q4,0.)
+
+  Error=Area_square-(Area_Q1+Area_Q2+Area_Q3+Area_Q4)
+  if ((abs(Error)>tol))then
+    if (mpp_pe().eq.mpp_root_pe()) then
+      call error_mesg('KID, square spreading', 'Square error is large!!', WARNING)
+      write(stderrunit,*) 'KID, square error, L,x0,y0, Error', L, x0 , y0, Error
+      write(stderrunit,*) 'KID, square error, Areas',Area_square, (Area_Q1+Area_Q2 + Area_Q3+Area_Q4), Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
+      write(stderrunit,*) 'KID, Triangle1',C1x,C1y,C2x,C2y,T12_Area,T12_Q1,T12_Q2,T12_Q3,T12_Q4,(T12_Q1+T12_Q2+T12_Q3+T12_Q4-T12_Area)
+      write(stderrunit,*) 'KID, Triangle2',C2x,C2y,C3x,C3y,T23_Area,T23_Q1,T23_Q2,T23_Q3,T23_Q4,(T23_Q1+T23_Q2+T23_Q3+T23_Q4-T23_Area)
+      write(stderrunit,*) 'KID, Triangle3',C3x,C3y,C4x,C4y,T34_Area,T34_Q1,T34_Q2,T34_Q3,T34_Q4,(T34_Q1+T34_Q2+T34_Q3+T34_Q4-T34_Area)
+      write(stderrunit,*) 'KID, Triangle4',C4x,C4y,C1x,C1y,T41_Area,T41_Q1,T41_Q2,T41_Q3,T41_Q4,(T41_Q1+T41_Q2+T41_Q3+T41_Q4-T41_Area)
+    endif
+  endif
+
+  exact_square_area=L**2
+  if (abs(Area_square-exact_square_area)>tol) then
+    call error_mesg('KID, square spreading', 'Square not evaluated accurately!!', WARNING)
+    if (mpp_pe().eq.mpp_root_pe()) then
+      write(stderrunit,*) 'KID, square calculations, L,x0,y0', L, x0 , y0
+      write(stderrunit,*) 'KID, square calculations, Areas',Area_square, (Area_Q1+Area_Q2 + Area_Q3+Area_Q4), Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
+    endif
+  endif
+
+  ! Adjust Areas so that the error is zero by subtracting the error from the largest sector.
+  if  (((Area_Q1>=Area_Q2) .and. (Area_Q1>=Area_Q3)) .and. (Area_Q1>=Area_Q4)) then
+    Area_Q1=Area_Q1+Error
+  elseif  (((Area_Q2>=Area_Q1) .and. (Area_Q2>=Area_Q3)) .and. (Area_Q2>=Area_Q4)) then
+    Area_Q2=Area_Q2+Error
+  elseif  (((Area_Q3>=Area_Q1) .and. (Area_Q3>=Area_Q2)) .and. (Area_Q3>=Area_Q4)) then
+    Area_Q3=Area_Q3+Error
+  elseif  (((Area_Q4>=Area_Q1) .and. (Area_Q4>=Area_Q2)) .and. (Area_Q4>=Area_Q3)) then
+    Area_Q4=Area_Q4+Error
+  else
+    call error_mesg('KID, square spreading', 'Error in square is larger than any quadrant!!', WARNING)
+    if (mpp_pe().eq.mpp_root_pe()) then
+      write(stderrunit,*) 'KID, square quadrants, L,x0,y0', L, x0 , y0, Error
+      write(stderrunit,*) 'KID, square quadrants, Areas',Area_square, (Area_Q1+Area_Q2 + Area_Q3+Area_Q4), Area_Q1,  Area_Q2 , Area_Q3,  Area_Q4
+    endif
+  endif
+
+end subroutine Square_into_quadrants_using_triangles
 
 !> Areas of a hexagon divided into quadrants
 !!

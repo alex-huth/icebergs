@@ -108,6 +108,7 @@ public dem_tests_init
 public set_constant_interaction_length_and_width
 public break_bonds_on_sub_steps, skip_first_outer_mts_step, no_frac_first_ts
 public hexagon_into_quadrants_using_triangles, Area_of_triangle, point_in_triangle
+public square_into_quadrants_using_triangles
 public point_in_interval, point_is_on_the_line
 public ij_component_of_id, spread_variable_across_cells, sum_up_spread_fields
 public initialize_iceberg_bonds, find_orientation_using_iceberg_bonds
@@ -2570,7 +2571,8 @@ subroutine mts_pack_in_dir(bergs, nbergs_to_send, dir)
   integer :: ics,ice,jcs,jce
   integer :: inhs,inhe,jnhs,jnhe
   real :: pfix !<used to adjust for periodicity
-  real :: rhc(4)
+  ! real :: rhc(4)
+  integer :: rhc(4)
   real :: clat,clon,dlat,dlon,r_dist
   integer :: current_conglom_id
   real :: current_halo_id
@@ -2589,8 +2591,10 @@ subroutine mts_pack_in_dir(bergs, nbergs_to_send, dir)
     is=grd%iec-halo_width+2; ie=grd%ied; js=grd%jsd; je=grd%jed
     if (grd%Lx>0.0 .and. grd%lon(grd%iec,grd%jec).eq.grd%maxlon_c) pfix=grd%Lx
     !lat/lon range of halo cells
-    rhc(1)=grd%lon(is-1,js);    rhc(2)=grd%lat(is-1,js)    !min corner
-    rhc(3)=grd%lon(grd%iec,je); rhc(4)=grd%lat(grd%iec,je) !max corner
+    ! rhc(1)=grd%lon(is-1,js);    rhc(2)=grd%lat(is-1,js)    !min corner
+    ! rhc(3)=grd%lon(grd%iec,je); rhc(4)=grd%lat(grd%iec,je) !max corner
+    rhc(1)=is; rhc(2)=js+1
+    rhc(3)=grd%iec; rhc(4)=je
     !range for non-halo cells (for contact with conglom)
     inhs=grd%isd; inhe=is-1; jnhs=js; jnhe=je
     !range for cells w/in contact dist of edge of comp domain:
@@ -2602,8 +2606,10 @@ subroutine mts_pack_in_dir(bergs, nbergs_to_send, dir)
   case ("w")
     is=grd%isd; ie=grd%isc+halo_width-1; js=grd%jsd; je=grd%jed
     if (grd%Lx>0.0 .and. grd%lon(grd%isc-1,grd%jsc-1).eq.grd%minlon_c) pfix=-grd%Lx
-    rhc(1)=grd%lon(grd%isc-1,js); rhc(2)=grd%lat(grd%isc-1,js)
-    rhc(3)=grd%lon(ie,je);        rhc(4)=grd%lat(ie,je)
+    ! rhc(1)=grd%lon(grd%isc-1,js); rhc(2)=grd%lat(grd%isc-1,js)
+    ! rhc(3)=grd%lon(ie,je);        rhc(4)=grd%lat(ie,je)
+    rhc(1)=grd%isc; rhc(2)=js+1
+    rhc(3)=ie; rhc(4)=je
     inhs=ie+1; inhe=grd%ied; jnhs=js; jnhe=je
     ice=min(grd%isc+nc_x,grd%ied)
     if (ice>ie) then
@@ -2612,8 +2618,10 @@ subroutine mts_pack_in_dir(bergs, nbergs_to_send, dir)
     endif
   case ("n")
     is=grd%isd; ie=grd%ied; js=grd%jec-halo_width+2; je=grd%jed
-    rhc(1)=grd%lon(is,js-1);    rhc(2)=grd%lat(is,js-1)
-    rhc(3)=grd%lon(ie,grd%jec); rhc(4)=grd%lat(ie,grd%jec)
+    ! rhc(1)=grd%lon(is,js-1);    rhc(2)=grd%lat(is,js-1)
+    ! rhc(3)=grd%lon(ie,grd%jec); rhc(4)=grd%lat(ie,grd%jec)
+    rhc(1)=is+1; rhc(2)=js
+    rhc(3)=ie; rhc(4)=grd%jec
     inhs=is; inhe=ie; jnhs=grd%jsd; jnhe=js-1
     jcs=max(grd%jec-nc_y,grd%jsd+1)
     if (jcs<js) then
@@ -2622,8 +2630,10 @@ subroutine mts_pack_in_dir(bergs, nbergs_to_send, dir)
     endif
   case ("s")
     is=grd%isd; ie=grd%ied; js=grd%jsd; je=grd%jsc+halo_width-1
-    rhc(1)=grd%lon(is,grd%jsc-1); rhc(2)=grd%lat(is,grd%jsc-1)
-    rhc(3)=grd%lon(ie,je);        rhc(4)=grd%lat(ie,je)
+    ! rhc(1)=grd%lon(is,grd%jsc-1); rhc(2)=grd%lat(is,grd%jsc-1)
+    ! rhc(3)=grd%lon(ie,je);        rhc(4)=grd%lat(ie,je)
+    rhc(1)=is+1; rhc(2)=grd%jsc
+    rhc(3)=ie; rhc(4)=je
     inhs=is; inhe=ie; jnhs=je+1; jnhe=grd%jed
     jce=min(grd%jsc+nc_y,grd%jed)
     if (jce>je) then
@@ -2729,7 +2739,8 @@ recursive subroutine mts_mark_and_pack_halo_and_congloms(bergs, berg, dir, nberg
   character(len=1) :: dir !< north,south,east,or west
   integer :: nbergs_to_send !< Number of bergs to send
   real :: pfix !<for periodicity
-  real :: rhc(4) !<lat/lon bounds of halo region for receiving cell
+  ! real :: rhc(4) !<lat/lon bounds of halo region for receiving cell
+  integer :: rhc(4)
   ! Local variables
   type(iceberg), pointer :: other_berg
   type(bond) , pointer :: current_bond
@@ -2742,7 +2753,8 @@ recursive subroutine mts_mark_and_pack_halo_and_congloms(bergs, berg, dir, nberg
     current_halo_id=berg%halo_berg; current_conglom_id=berg%conglom_id
     nbergs_to_send=nbergs_to_send+1
 
-    if (berg%lon<rhc(1).or.berg%lat<rhc(2).or.berg%lon>rhc(3).or.berg%lat>rhc(4)) then
+    ! if (berg%lon<rhc(1).or.berg%lat<rhc(2).or.berg%lon>rhc(3).or.berg%lat>rhc(4)) then
+    if (berg%ine<rhc(1).or.berg%jne<rhc(2).or.berg%ine>rhc(3).or.berg%jne>rhc(4)) then
       berg%halo_berg=max(2.,current_halo_id) !outside neighboring PE halo
     else
       berg%halo_berg=1 !inside neighboring PE halo
@@ -3934,12 +3946,12 @@ real :: temp_lon,temp_lat,length
   if (bergs%mts .and. abs(localberg%halo_berg)>1) then
     temp_lon = localberg%lon; temp_lat = localberg%lat
 
-    if (temp_lon > grd%lon(grd%ied,grd%jed)) then
+    if (temp_lon >= grd%lon(grd%ied,grd%jed)) then
       temp_lon = grd%lonc(grd%ied,grd%jed)
     elseif (temp_lon < grd%lon(grd%isd,grd%jsd)) then
       temp_lon = grd%lonc(grd%isd+1,grd%jsd+1)
     endif
-    if (temp_lat > grd%lat(grd%ied,grd%jed)) then
+    if (temp_lat >= grd%lat(grd%ied,grd%jed)) then
       temp_lat = grd%latc(grd%ied,grd%jed)
     elseif (temp_lat < grd%lat(grd%isd,grd%jsd)) then
       temp_lat = grd%latc(grd%isd+1,grd%jsd+1)
@@ -3999,7 +4011,10 @@ real :: temp_lon,temp_lat,length
         else
           write(stderrunit,'("KID, unpack_berg_from_buffer pe=(",i3,a,2i4,a,2f8.2)')&
             & mpp_pe(),') Failed to find i,j=',localberg%ine,localberg%jne,' for lon,lat=',localberg%lon,localberg%lat
-          write(stderrunit,*) localberg%halo_berg
+!          if (localberg%id==4294972731) then
+          lres=find_cell_wide(grd, localberg%lon, localberg%lat, localberg%ine, localberg%jne, explain=.true.)
+!          endif
+          write(stderrunit,*) localberg%id, localberg%halo_berg
           write(stderrunit,*) localberg%lon,localberg%lat
           write(stderrunit,*) localberg%uvel,localberg%vvel
           write(stderrunit,*) localberg%axn,localberg%ayn !Alon
@@ -6489,13 +6504,14 @@ endif
 end function find_cell
 
 !> Scans each all grid cells until is_point_in_cell() is true (includes halos)
-logical function find_cell_wide(grd, x, y, oi, oj)
+logical function find_cell_wide(grd, x, y, oi, oj, explain)
 ! Arguments
 type(icebergs_gridded), intent(in) :: grd !< Container for gridded fields
 real, intent(in) :: x !< Longitude of position
 real, intent(in) :: y !< Latitude of position
 integer, intent(out) :: oi !< i-index of cell containing position or -999
 integer, intent(out) :: oj !< j-index of cell containing position or -999
+logical, intent(in), optional :: explain !< If true, print debugging
 ! Local variables
 integer :: i,j
 
@@ -6504,7 +6520,7 @@ find_cell_wide=.false.
 oi=floor((x-grd%lon(grd%isd,grd%jsd))/(grd%lon(grd%isd+1,grd%jsd+1)-grd%lon(grd%isd,grd%jsd)))+grd%isd+1
 oj=floor((y-grd%lat(grd%isd,grd%jsd))/(grd%lat(grd%isd+1,grd%jsd+1)-grd%lat(grd%isd,grd%jsd)))+grd%jsd+1
 if (.not. (oi-1.lt.grd%isd.or.oi.gt.grd%ied.or.oj-1.lt.grd%jsd.or.oj.gt.grd%jed)) then
-  if (is_point_in_cell(grd, x, y, oi, oj)) then
+  if (is_point_in_cell(grd, x, y, oi, oj, explain=explain)) then
     find_cell_wide=.true.; return
   endif
 endif
@@ -6512,7 +6528,7 @@ endif
 oi=-999; oj=-999
 
   do j=grd%jsd+1,grd%jed; do i=grd%isd+1,grd%ied
-      if (is_point_in_cell(grd, x, y, i, j)) then
+      if (is_point_in_cell(grd, x, y, i, j, explain=explain)) then
         oi=i; oj=j; find_cell_wide=.true.
         return
       endif
@@ -6639,15 +6655,15 @@ integer :: stderrunit
   xx3= apply_modulo_around_point(x3,x0,Lx)
 
 
-  l0=(xx-xx0)*(y1-y0)-(y-y0)*(xx1-xx0)
-  l1=(xx-xx1)*(y2-y1)-(y-y1)*(xx2-xx1)
-  l2=(xx-xx2)*(y3-y2)-(y-y2)*(xx3-xx2)
-  l3=(xx-xx3)*(y0-y3)-(y-y3)*(xx0-xx3)
+  l0=(xx-xx0)*(y1-y0)-(y-y0)*(xx1-xx0) !S segment
+  l1=(xx-xx1)*(y2-y1)-(y-y1)*(xx2-xx1) !E segment
+  l2=(xx-xx2)*(y3-y2)-(y-y2)*(xx3-xx2) !N segment
+  l3=(xx-xx3)*(y0-y3)-(y-y3)*(xx0-xx3) !W segment
 
-  !We use an asymmetry between South and East line boundaries and North and East
+  !We use an asymmetry between South and West line boundaries and North and East
   !to avoid icebergs appearing to two cells (half values used for debugging)
-  !This is intended to make the South and East boundaries be part of the
-  !cell, while the North and West are not part of the cell.
+  !This is intended to make the South and West boundaries be part of the
+  !cell, while the North and East are not part of the cell.
   p0=sign(1., l0); if (l0.eq.0.) p0=-0.5
   p1=sign(1., l1); if (l1.eq.0.) p1=0.5
   p2=sign(1., l2); if (l2.eq.0.) p2=0.5
@@ -6983,7 +6999,7 @@ end subroutine calc_xiyj
 
 !> Returns true if non-dimensional position xi,yj is in unit interval
 !!
-!! Includes South and East boundaries, and excludes North and West.
+!! Includes South and West boundaries, and excludes North and East.
 !! \todo Double check definition of is_point_within_xi_yj_bounds()
 logical function is_point_within_xi_yj_bounds(xi,yj)
 ! Arguments
@@ -8590,7 +8606,7 @@ subroutine Square_into_quadrants_using_triangles(x0, y0, L, theta, Area_square ,
   C1x= L2 ; C1y= L2 !Corner 1 (top right)
   C2x=-L2 ; C2y= L2 !Corner 2 (top left)
   C3x=-L2 ; C3y=-L2 !Corner 3 (bottom left)
-  C1x= L2 ; C1y=-L2 !Corner 4 (bottom right)
+  C4x= L2 ; C4y=-L2 !Corner 4 (bottom right)
 
   ! Finding positions of corners
   call rotate_and_translate(C1x,C1y,theta,x0,y0)

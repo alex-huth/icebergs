@@ -55,6 +55,7 @@ use ice_bergs_framework, only: set_constant_interaction_length_and_width, skip_f
 use ice_bergs_framework, only: break_bonds_on_sub_steps, initialize_iceberg_bonds
 use ice_bergs_framework, only: short_step_mts_grounding, radius_based_drag
 use ice_bergs_framework, only: hexagon_into_quadrants_using_triangles
+use ice_bergs_framework, only: square_into_quadrants_using_triangles
 use ice_bergs_framework, only: sum_up_spread_fields, sum_up_spread_fields, Area_of_triangle
 use ice_bergs_framework, only: point_in_triangle, point_in_interval, point_is_on_the_line
 use ice_bergs_framework, only: convert_from_grid_to_meters, convert_from_meters_to_grid

@@ -11,8 +11,9 @@ use ice_bergs_framework, only : icebergs, iceberg, bond, delete_iceberg_from_lis
 use ice_bergs_framework, only : add_new_berg_to_list
 use ice_bergs_framework, only : spread_variable_across_cells, sum_up_spread_fields
 use ice_bergs_framework, only : hexagon_into_quadrants_using_triangles, Rearth
+use ice_bergs_framework, only : square_into_quadrants_using_triangles
 use ice_bergs_framework, only : initialize_iceberg_bonds, count_bonds
-use ice_bergs_framework, only : find_cell_wide, pos_within_cell, generate_id
+use ice_bergs_framework, only : find_cell, pos_within_cell, generate_id
 use ice_bergs_framework, only : debug, footloose, connect_all_bonds, delete_all_bonds
 use ice_bergs_framework, only : update_halo_calved_tabular_icebergs, assign_n_bonds,transfer_mts_bergs
 use fms_mod, only : error_mesg, FATAL, WARNING, stderr
@@ -552,12 +553,11 @@ subroutine ice_shelf_to_bonded_bergs(bergs, TC)
   real :: minlon, maxlon, minlat, maxlat
   real :: minlon0, maxlon0, minlat0, maxlat0
   real :: minx, miny, cos_lat_ref, dlonscale
-  integer :: stderrunit, i, k, nbonds, berg_count
+  integer :: stderrunit, i, k, nbonds
   logical :: check_bond_quality
 
   !The number of tabular icebergs to initialize on the current PE
   bcount = TC%berg_pe_count
-  berg_count = 0
 
   !Note: account for the calving mask to be between 0 and 1
   !Initialize bergs over all cells with mask>0. Eliminate a berg if its groundfrac is greater than some threshold
@@ -612,10 +612,10 @@ subroutine ice_shelf_to_bonded_bergs(bergs, TC)
     endif
 
     !grid bounds
-    maxlon0=maxval(grd%lon(grd%isc-1:grd%iec, grd%jsc-1:grd%jec))
-    maxlat0=maxval(grd%lat(grd%isc-1:grd%iec, grd%jsc-1:grd%jec))
-    minlon0=minval(grd%lon(grd%isc-1:grd%iec, grd%jsc-1:grd%jec))
-    minlat0=minval(grd%lat(grd%isc-1:grd%iec, grd%jsc-1:grd%jec))
+    maxlon0=maxval(grd%lon(          grd%iec, grd%jsc-1:grd%jec))
+    maxlat0=maxval(grd%lat(grd%isc-1:grd%iec,           grd%jec))
+    minlon0=minval(grd%lon(grd%isc-1        , grd%jsc-1:grd%jec))
+    minlat0=minval(grd%lat(grd%isc-1:grd%iec, grd%jsc-1        ))
 
     !initialize the particles for each new tabular iceberg
     do i = 1,bcount
@@ -681,11 +681,13 @@ subroutine ice_shelf_to_bonded_bergs(bergs, TC)
 
       lat = minlat
       k=0
-      berg_count=0
-      do while (lat<=maxlat)
+      !Start calving bergs on the current PE, keeping in mind that bergs that fall on the eastern and northern
+      !boundary of the PE should actually be included in the PEs to the east or north, respectively, instead of
+      !the current PE
+      do while (lat<=maxlat .and. lat<maxlat0)
         k=k+1
 
-        if (lat>minlat0) then
+        if (lat>=minlat0) then
 
           if (grd%grid_is_latlon) dlon = dlonscale/cos(lat*(pi/180.))
 
@@ -695,9 +697,8 @@ subroutine ice_shelf_to_bonded_bergs(bergs, TC)
             lon=minlon
           endif
 
-          do while (lon<=maxlon)
-            if (lon>minlon0) then
-              berg_count=berg_count+1
+          do while (lon<=maxlon .and. lon<maxlon0)
+            if (lon>=minlon0) then
               !Calve particles that overlap the mask.  Save the overlapping area of
               !each particle with neighboring cells. Their thickness and scaling
               !will be determined below in new_tabular_bergs_thickness_and_pressure.
@@ -1195,8 +1196,9 @@ subroutine begin_calving_tabular_iceberg_from_shelf(bergs, grd, lon, lat, calve_
 
   ! allocations_done=.false.
 
-  lres=find_cell_wide(grd, lon, lat, i, j)
+  lres=find_cell(grd, lon, lat, i, j)
 
+  if (.not. lres) return
   !Assume that the calve mask spans over the cells that shelf associated with the berg may advect into
   !Get rid of bergs that clearly do not overlap the calve mask
   if (all(frac_shelf(i-1:i+1,j-1:j+1)==0) .and. all(calve_mask(i-1:i+1,j-1:j+1)==0)) return
@@ -1210,6 +1212,10 @@ subroutine begin_calving_tabular_iceberg_from_shelf(bergs, grd, lon, lat, calve_
     write(stderrunit,*) 'KID, calve_icebergs: something went very wrong!',i,j,xi,yj
     call error_mesg('KID, calve_icebergs', 'berg xi,yj is not correct!', FATAL)
   endif
+
+  !Ignore bergs on the N and E boundry of the PE, as they will be included in the PEs to the N or E, respectively
+  if ((i==grd%iec .and. xi==1) .or. (j==grd%jec .and. yj==1)) return
+
   ! if (grd%msk(i,j)<0.5) then
   !   write(stderrunit,*) 'KID, calve_icebergs: WARNING!!! Iceberg born in land cell',i,j,newberg%lon,newberg%lat
   !   if (debug) call error_mesg('KID, calve_icebergs', 'Iceberg born in Land Cell!', FATAL)

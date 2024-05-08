@@ -2607,8 +2607,8 @@ subroutine mts_pack_in_dir(bergs, nbergs_to_send, dir)
   integer :: ics,ice,jcs,jce
   integer :: inhs,inhe,jnhs,jnhe
   real :: pfix !<used to adjust for periodicity
+  real :: x(4),y(4) !corners of a box from within to send bergs from this PE to another PE
   ! real :: rhc(4)
-  integer :: rhc(4)
   real :: clat,clon,dlat,dlon,r_dist
   integer :: current_conglom_id
   real :: current_halo_id
@@ -2627,10 +2627,13 @@ subroutine mts_pack_in_dir(bergs, nbergs_to_send, dir)
     is=grd%iec-halo_width+2; ie=grd%ied; js=grd%jsd; je=grd%jed
     if (grd%Lx>0.0 .and. grd%lon(grd%iec,grd%jec).eq.grd%maxlon_c) pfix=grd%Lx
     !lat/lon range of halo cells
+    x(1)=grd%lon(is-1,js);     y(1)=grd%lat(is-1,js)    !SW corner
+    x(2)=grd%lon(grd%iec,js);  y(2)=grd%lat(grd%iec,js) !SE corner
+    x(3)=grd%lon(grd%iec,je);  y(3)=grd%lat(grd%iec,je) !NE corner
+    x(4)=grd%lon(is-1,je);     y(4)=grd%lat(is-1,je)    !NW corner
+
     ! rhc(1)=grd%lon(is-1,js);    rhc(2)=grd%lat(is-1,js)    !min corner
     ! rhc(3)=grd%lon(grd%iec,je); rhc(4)=grd%lat(grd%iec,je) !max corner
-    rhc(1)=is; rhc(2)=js+1
-    rhc(3)=grd%iec; rhc(4)=je
     !range for non-halo cells (for contact with conglom)
     inhs=grd%isd; inhe=is-1; jnhs=js; jnhe=je
     !range for cells w/in contact dist of edge of comp domain:
@@ -2642,10 +2645,14 @@ subroutine mts_pack_in_dir(bergs, nbergs_to_send, dir)
   case ("w")
     is=grd%isd; ie=grd%isc+halo_width-1; js=grd%jsd; je=grd%jed
     if (grd%Lx>0.0 .and. grd%lon(grd%isc-1,grd%jsc-1).eq.grd%minlon_c) pfix=-grd%Lx
+    !lat/lon range of halo cells
+    x(1)=grd%lon(grd%isc-1,js); y(1)=grd%lat(grd%isc-1,js) !SW corner
+    x(2)=grd%lon(ie,js);        y(2)=grd%lat(ie,js)        !SE corner
+    x(3)=grd%lon(ie,je);        y(3)=grd%lat(ie,je)        !NE corner
+    x(4)=grd%lon(grd%isc-1,je); y(4)=grd%lat(grd%isc-1,je) !NW corner
+
     ! rhc(1)=grd%lon(grd%isc-1,js); rhc(2)=grd%lat(grd%isc-1,js)
     ! rhc(3)=grd%lon(ie,je);        rhc(4)=grd%lat(ie,je)
-    rhc(1)=grd%isc; rhc(2)=js+1
-    rhc(3)=ie; rhc(4)=je
     inhs=ie+1; inhe=grd%ied; jnhs=js; jnhe=je
     ice=min(grd%isc+nc_x,grd%ied)
     if (ice>ie) then
@@ -2654,10 +2661,13 @@ subroutine mts_pack_in_dir(bergs, nbergs_to_send, dir)
     endif
   case ("n")
     is=grd%isd; ie=grd%ied; js=grd%jec-halo_width+2; je=grd%jed
+    x(1)=grd%lon(is,js-1);    y(1)=grd%lat(is,js-1)    !SW corner
+    x(2)=grd%lon(ie,js-1);    y(2)=grd%lat(ie,js-1)    !SE corner
+    x(3)=grd%lon(ie,grd%jec); y(3)=grd%lat(ie,grd%jec) !NE corner
+    x(4)=grd%lon(is,grd%jec); y(4)=grd%lat(is,grd%jec) !NW corner
+
     ! rhc(1)=grd%lon(is,js-1);    rhc(2)=grd%lat(is,js-1)
     ! rhc(3)=grd%lon(ie,grd%jec); rhc(4)=grd%lat(ie,grd%jec)
-    rhc(1)=is+1; rhc(2)=js
-    rhc(3)=ie; rhc(4)=grd%jec
     inhs=is; inhe=ie; jnhs=grd%jsd; jnhe=js-1
     jcs=max(grd%jec-nc_y,grd%jsd+1)
     if (jcs<js) then
@@ -2666,10 +2676,13 @@ subroutine mts_pack_in_dir(bergs, nbergs_to_send, dir)
     endif
   case ("s")
     is=grd%isd; ie=grd%ied; js=grd%jsd; je=grd%jsc+halo_width-1
+    x(1)=grd%lon(is,grd%jsc-1); y(1)=grd%lat(is,grd%jsc-1) !SW corner
+    x(2)=grd%lon(ie,grd%jsc-1); y(2)=grd%lat(ie,grd%jsc-1) !SE corner
+    x(3)=grd%lon(ie,je);        y(3)=grd%lat(ie,je)        !NE corner
+    x(4)=grd%lon(is,je);        y(4)=grd%lat(is,je)        !NW corner
+
     ! rhc(1)=grd%lon(is,grd%jsc-1); rhc(2)=grd%lat(is,grd%jsc-1)
     ! rhc(3)=grd%lon(ie,je);        rhc(4)=grd%lat(ie,je)
-    rhc(1)=is+1; rhc(2)=grd%jsc
-    rhc(3)=ie; rhc(4)=je
     inhs=is; inhe=ie; jnhs=je+1; jnhe=grd%jed
     jce=min(grd%jsc+nc_y,grd%jed)
     if (jce>je) then
@@ -2703,7 +2716,7 @@ subroutine mts_pack_in_dir(bergs, nbergs_to_send, dir)
     berg=>bergs%list(grdi,grdj)%first
     do while (associated(berg))
       if (berg%id>0) then !bergs that have already been processed are marked with negative berg%id
-        call mts_mark_and_pack_halo_and_congloms(bergs,berg,dir,nbergs_to_send,pfix,rhc)
+        call mts_mark_and_pack_halo_and_congloms(bergs,berg,dir,nbergs_to_send,pfix,x,y)!,rhc)
       endif
       berg=>berg%next
     enddo
@@ -2768,33 +2781,38 @@ subroutine mts_pack_in_dir(bergs, nbergs_to_send, dir)
 end subroutine mts_pack_in_dir
 
 !> Find, mark, and pack the halo and conglomerate bergs
-recursive subroutine mts_mark_and_pack_halo_and_congloms(bergs, berg, dir, nbergs_to_send,pfix, rhc)
+recursive subroutine mts_mark_and_pack_halo_and_congloms(bergs, berg, dir, nbergs_to_send, pfix, x, y)!,rhc)
   ! Arguments
   type(icebergs), pointer :: bergs !< Container for all types and memory
   type(iceberg), pointer :: berg !< Berg to pack
   character(len=1) :: dir !< north,south,east,or west
   integer :: nbergs_to_send !< Number of bergs to send
   real :: pfix !<for periodicity
+  real :: x(4),y(4) !corners of a box from within to send bergs from this PE to another PE
   ! real :: rhc(4) !<lat/lon bounds of halo region for receiving cell
-  integer :: rhc(4)
   ! Local variables
   type(iceberg), pointer :: other_berg
   type(bond) , pointer :: current_bond
   integer :: k !<bond counter
   integer :: current_conglom_id
   real :: current_halo_id
-
+  logical :: tf
   !pack the berg for transfer if it has not been packed already
   if (.not. mts_berg_sent(berg%conglom_id,dir)) then
     current_halo_id=berg%halo_berg; current_conglom_id=berg%conglom_id
     nbergs_to_send=nbergs_to_send+1
 
-    ! if (berg%lon<rhc(1).or.berg%lat<rhc(2).or.berg%lon>rhc(3).or.berg%lat>rhc(4)) then
-    if (berg%ine<rhc(1).or.berg%jne<rhc(2).or.berg%ine>rhc(3).or.berg%jne>rhc(4)) then
-      berg%halo_berg=max(2.,current_halo_id) !outside neighboring PE halo
-    else
+    if (is_point_in_cell_coords(bergs%grd,berg%lon,berg%lat,x(1),y(1),x(2),y(2),x(3),y(3),x(4),y(4),skipmod=.true.)) then
       berg%halo_berg=1 !inside neighboring PE halo
+    else
+      berg%halo_berg=max(2.,current_halo_id) !outside neighboring PE halo
     endif
+
+    ! if (berg%lon<rhc(1).or.berg%lat<rhc(2).or.berg%lon>rhc(3).or.berg%lat>rhc(4)) then
+    !   berg%halo_berg=max(2.,current_halo_id) !outside neighboring PE halo
+    ! else
+    !   berg%halo_berg=1 !inside neighboring PE halo
+    ! endif
 
     select case (dir)
     case ("e")
@@ -2828,7 +2846,7 @@ recursive subroutine mts_mark_and_pack_halo_and_congloms(bergs, berg, dir, nberg
     if  (associated(current_bond%other_berg)) then
       other_berg=>current_bond%other_berg
       if (other_berg%id>0) then
-        call mts_mark_and_pack_halo_and_congloms(bergs,other_berg,dir,nbergs_to_send,pfix,rhc)
+        call mts_mark_and_pack_halo_and_congloms(bergs,other_berg,dir,nbergs_to_send,pfix,x,y)!,rhc)
       endif
     endif
     current_bond=>current_bond%next_bond
@@ -4060,7 +4078,7 @@ real :: temp_lon,temp_lat,length
 !          if (localberg%id==4294972731) then
           lres=find_cell_wide(grd, localberg%lon, localberg%lat, localberg%ine, localberg%jne, explain=.true.)
 !          endif
-          write(stderrunit,*) localberg%id, localberg%halo_berg
+          write(stderrunit,*) localberg%id, localberg%halo_berg, localberg%conglom_id
           write(stderrunit,*) localberg%lon,localberg%lat
           write(stderrunit,*) localberg%uvel,localberg%vvel
           write(stderrunit,*) localberg%axn,localberg%ayn !Alon
@@ -6686,8 +6704,76 @@ real :: tol
 
 end function is_point_in_cell
 
+! Returns true if point is within a quadrilateral with given corner coordinates
+logical function is_point_in_cell_coords(grd, x, y, x0, y0, x1, y1, x2, y2, x3, y3, skipmod, explain)
+! Arguments
+type(icebergs_gridded), intent(in) :: grd !< Container for gridded fields
+real, intent(in) :: x !< Longitude of position
+real, intent(in) :: y !< Latitude of position
+real, intent(in) :: x0 !< Longitude of first corner
+real, intent(in) :: y0 !< Latitude of first corner
+real, intent(in) :: x1 !< Longitude of second corner
+real, intent(in) :: y1 !< Latitude of second corner
+real, intent(in) :: x2 !< Longitude of third corner
+real, intent(in) :: y2 !< Latitude of third corner
+real, intent(in) :: x3 !< Longitude of fourth corner
+real, intent(in) :: y3 !< Latitude of fourth corner
+logical, intent(in), optional :: skipmod !< If true, skip modulo adjustments
+logical, intent(in), optional :: explain !< If true, print debugging
+! Local variables
+real :: xlo, xhi, ylo, yhi
+real :: Lx
+real :: tol
+logical :: skip_mod !local version of skip_mod
+
+  ! Get the stderr unit number
+  Lx=grd%Lx
+
+  is_point_in_cell_coords=.false.
+
+
+  if (present(skipmod)) then
+    skip_mod=skipmod
+  else
+    skip_mod=.false.
+  endif
+
+  ! Test crude bounds
+  if (.not. skip_mod) then
+    xlo=min( apply_modulo_around_point(x0   ,x,  Lx), &
+      apply_modulo_around_point(x1   ,x,  Lx), &
+      apply_modulo_around_point(x3   ,x,  Lx), &
+      apply_modulo_around_point(x2   ,x,  Lx) )
+    xhi=max( apply_modulo_around_point(x0   ,x,  Lx), &
+      apply_modulo_around_point(x1   ,x,  Lx), &
+      apply_modulo_around_point(x3   ,x,  Lx), &
+      apply_modulo_around_point(x2   ,x,  Lx) )
+
+    ! The modolo function inside sum_sign_dot_prod leads to a roundoff.
+    !Adding adding a tolorance to the crude bounds avoids excluding the cell which
+    !would be correct after roundoff. This is a bit of a hack.
+    tol=0.1
+    if (x.lt.(xlo-tol) .or. x.gt.(xhi+tol)) return
+  else
+    xlo=min( x0, x1, x2, x3 )
+    xhi=max( x0, x1, x2, x3 )
+    if (x.lt.xlo .or. x.gt.xhi) return
+  endif
+
+  ylo=min( y0, y1, y2, y3 )
+  yhi=max( y0, y1, y2, y3 )
+  if (y.lt.ylo .or. y.gt.yhi) return
+
+  is_point_in_cell_coords=sum_sign_dot_prod4(x0,y0, &
+                                             x1,y1, &
+                                             x2,y2, &
+                                             x3,y3, &
+                                             x, y,Lx, &
+                                             skipmod=skipmod, explain=explain)
+end function is_point_in_cell_coords
+
 !> Returns true if point x,y is inside polygon with four corners
-logical function sum_sign_dot_prod4(x0, y0, x1, y1, x2, y2, x3, y3, x, y, Lx, explain)
+logical function sum_sign_dot_prod4(x0, y0, x1, y1, x2, y2, x3, y3, x, y, Lx, skipmod, explain)
 ! Arguments
 real, intent(in) :: x0 !< Longitude of first corner
 real, intent(in) :: y0 !< Latitude of first corner
@@ -6700,23 +6786,34 @@ real, intent(in) :: y3 !< Latitude of fourth corner
 real, intent(in) :: x !< Longitude of point
 real, intent(in) :: y !< Latitude of point
 real, intent(in) :: Lx !< Length of domain in zonal direction
+logical, intent(in), optional :: skipmod !< If true, skip modulo adjustments
 logical, intent(in), optional :: explain !< If true, print debugging
 ! Local variables
 real :: p0,p1,p2,p3,xx
 real :: l0,l1,l2,l3
 real :: xx0,xx1,xx2,xx3
 integer :: stderrunit
+logical :: skip_mod !local version of skip_mod
 
   ! Get the stderr unit number
   stderrunit=stderr()
 
   sum_sign_dot_prod4=.false.
-  xx= apply_modulo_around_point(x,x0,Lx)
-  xx0= apply_modulo_around_point(x0,x0,Lx)
-  xx1= apply_modulo_around_point(x1,x0,Lx)
-  xx2= apply_modulo_around_point(x2,x0,Lx)
-  xx3= apply_modulo_around_point(x3,x0,Lx)
+  if (present(skipmod)) then
+    skip_mod=skipmod
+  else
+    skip_mod=.false.
+  endif
 
+  if (.not. skip_mod) then
+    xx= apply_modulo_around_point(x,x0,Lx)
+    xx0= apply_modulo_around_point(x0,x0,Lx)
+    xx1= apply_modulo_around_point(x1,x0,Lx)
+    xx2= apply_modulo_around_point(x2,x0,Lx)
+    xx3= apply_modulo_around_point(x3,x0,Lx)
+  else
+    xx=x; xx0=x0; xx1=x1; xx2=x2; xx3=x3
+  endif
 
   l0=(xx-xx0)*(y1-y0)-(y-y0)*(xx1-xx0) !S segment
   l1=(xx-xx1)*(y2-y1)-(y-y1)*(xx2-xx1) !E segment

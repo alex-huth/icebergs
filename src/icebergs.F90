@@ -60,6 +60,7 @@ use ice_bergs_framework, only: sum_up_spread_fields, sum_up_spread_fields, Area_
 use ice_bergs_framework, only: point_in_triangle, point_in_interval, point_is_on_the_line
 use ice_bergs_framework, only: convert_from_grid_to_meters, convert_from_meters_to_grid
 use ice_bergs_framework, only: spread_variable_across_cells, find_orientation_using_iceberg_bonds
+use ice_bergs_framework, only: berg_exists
 
 use ice_bergs_io,        only: ice_bergs_io_init, write_restart_bergs, write_trajectory, write_bond_trajectory
 use ice_bergs_io,        only: read_restart_bergs, read_restart_calving
@@ -2796,7 +2797,7 @@ subroutine thermodynamics(bergs)
   do grdj = grd%jsc-1,grd%jec+1 ; do grdi = grd%isc-1,grd%iec+1
     this=>bergs%list(grdi,grdj)%first
     do while(associated(this))
-      if (debug) call check_position(grd, this, 'thermodynamics (top)')
+      if (debug) call check_position(bergs, grd, this, 'thermodynamics (top)')
 
       if (this%static_berg.gt.1.0) then
         !this is a tabular berg that has not yet calved from the shelf, so skip it
@@ -4934,7 +4935,8 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   call mpp_clock_begin(bergs%clock_mom)
 
   if (.not.bergs%Static_icebergs) then
-  call assign_n_bonds(bergs) ! for debugging tabular calving!
+!    call assign_n_bonds(bergs) ! for debugging tabular calving!
+    if (berg_exists(bergs)) print *,'BE: pre-evolve-icebergs'
     if (bergs%mts) then
       call evolve_icebergs_mts(bergs)
     else
@@ -4961,6 +4963,7 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   if (bergs%footloose) call footloose_calving(bergs, time)
   call mpp_clock_end(bergs%clock_fl1)
 
+  if (berg_exists(bergs)) print *,'BE: post_send_bergs_to_other_pes'
 
   ! Calving of tabular bonded bergs
   ! TODO: does this make sense here?
@@ -4972,6 +4975,7 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
     frac_cberg(:,:)       =TC%frac_cberg(grd%isc:grd%iec,grd%jsc:grd%jec)
   endif
 
+  if (berg_exists(bergs)) print *,'BE: post_process_tabular_calving'
 
   call mpp_clock_begin(bergs%clock_com2)
   if (bergs%mts) then
@@ -6111,7 +6115,7 @@ subroutine evolve_icebergs_mts(bergs)
             berg%jne,berg%lat,grd%lat(berg%ine-1,berg%jne-1),grd%lat(berg%ine,berg%jne)
           if (debug) call error_mesg('KID, evolve_icebergs_mts','berg is in wrong starting cell!',FATAL)
         endif
-        if (debug) call check_position(grd, berg, 'evolve_icebergs_mts (top)')
+        if (debug) call check_position(bergs, grd, berg, 'evolve_icebergs_mts (top)')
       end if
       berg=>berg%next
     enddo
@@ -6540,6 +6544,10 @@ subroutine evolve_icebergs_mts(bergs)
         xi=berg%xi     ; yj=berg%yj
         ! finalize new iceberg positions and index
         call adjust_index_and_ground(grd, lonn, latn, uveln, vveln, i, j, xi, yj, bounced, error_flag, berg%id)
+        if (xi .ne. xi) then
+          print *,'id',berg%id,'EIM xi0',berg%xi,'xi1',xi,'u,v',uveln,vveln,'lonlat',berg%lon,berg%lat,&
+            'msk0',grd%msk(berg%ine,berg%jne),'msk1',grd%msk(i,j),'i,j 0',berg%ine,berg%jne,'i,j 1',i,j,'lonn,latn',lonn,latn
+        endif
         berg%lon=lonn      ;  berg%lat=latn
         berg%lon_old=lonn  ;  berg%lat_old=latn
         berg%ine=i    ;  berg%jne=j
@@ -6604,7 +6612,7 @@ subroutine evolve_icebergs(bergs)
                    berg%jne,berg%lat,grd%lat(berg%ine-1,berg%jne-1),grd%lat(berg%ine,berg%jne)
           if (debug) call error_mesg('KID, evolve_iceberg','berg is in wrong starting cell!',FATAL)
         endif
-        if (debug) call check_position(grd, berg, 'evolve_iceberg (top)')
+        if (debug) call check_position(bergs, grd, berg, 'evolve_iceberg (top)')
 
         if (grd%tidal_drift>0.) then
           call getRandomNumbers(rns, rx)
@@ -6647,7 +6655,7 @@ subroutine evolve_icebergs(bergs)
         !call interp_flds(grd, berg%lon, berg%lat, i, j, xi, yj, berg%uo, berg%vo, berg%ui, &
         !berg%vi, berg%ua, berg%va, berg%ssh_x, berg%ssh_y, berg%sst,berg%od)
         !if (debug) call print_berg(stderr(), berg, 'evolve_iceberg, final posn.')
-        if (debug) call check_position(grd, berg, 'evolve_iceberg (bot)')
+        if (debug) call check_position(bergs, grd, berg, 'evolve_iceberg (bot)')
       endif
       berg=>berg%next
     enddo ! loop over all bergs

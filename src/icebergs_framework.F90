@@ -115,6 +115,7 @@ public ij_component_of_id, spread_variable_across_cells, sum_up_spread_fields
 public initialize_iceberg_bonds, find_orientation_using_iceberg_bonds
 public convert_from_grid_to_meters, convert_from_meters_to_grid
 public update_halo_calved_tabular_icebergs, delete_all_bonds
+public berg_exists
 
 !> Container for gridded fields
 type :: icebergs_gridded
@@ -2235,7 +2236,7 @@ logical :: halo_debugging
     do grdj = grd%jsc,grd%jec ; do grdi = grd%isc,grd%iec
       this=>bergs%list(grdi,grdj)%first
       do while (associated(this))
-        call check_position(grd, this, 'exchange (bot)')
+        call check_position(bergs, grd, this, 'exchange (bot)')
         if (this%ine.lt.bergs%grd%isc .or. &
             this%ine.gt.bergs%grd%iec .or. &
             this%jne.lt.bergs%grd%jsc .or. &
@@ -2281,9 +2282,6 @@ logical :: halo_debugging
 
   ! For convenience
   grd=>bergs%grd
-
-  call mpp_sync_self()
-
 
   ! Step 1: Clear the current halos
   call mpp_sync_self()
@@ -2397,6 +2395,8 @@ logical :: halo_debugging
     nbergs_rcvd_from_e=0
   endif
 
+  call mpp_sync_self()
+
   ! Find number of bergs that headed north/south
   nbergs_to_send_n=0
   nbergs_to_send_s=0
@@ -2504,6 +2504,9 @@ logical :: halo_debugging
   else
     nbergs_rcvd_from_n=0
   endif
+
+  call mpp_sync_self()
+
 end subroutine update_halo_calved_tabular_icebergs
 
 !> For the multiple-timestepping velocity verlet scheme, populates the current PE with the following
@@ -2519,13 +2522,15 @@ integer :: grdi, grdj,i
 type(iceberg), pointer :: this,kick_the_bucket
 integer :: nbergs_to_send_e, nbergs_to_send_w
 integer :: nbergs_to_send_n, nbergs_to_send_s
-
+integer :: count_d, count_k
   grd=>bergs%grd ! for convenience
   stderrunit = stderr() ! Get the stderr unit number
 
+  if (berg_exists(bergs)) print *,'BE: pre clear halo'
+
   ! Step 1: Clear the current halos
   do grdj = grd%jsd,grd%jsc-1 ;  do grdi = grd%isd,grd%ied
-    call delete_all_bergs_in_list(bergs, grdj, grdi)
+    call delete_all_bergs_in_list(bergs,grdj,grdi)
   enddo ; enddo
 
   do grdj = grd%jec+1,grd%jed ;  do grdi = grd%isd,grd%ied
@@ -2555,23 +2560,66 @@ integer :: nbergs_to_send_n, nbergs_to_send_s
     enddo
   enddo;enddo
 
+  if (berg_exists(bergs)) print *,'BE: pre connect'
+
   !Copy bergs between PEs
   do i = 1,2 !run twice to account for diagonal transfers and guarantee robust transfers of conglomerates
+    if (mpp_pe()==6) print *,'connect a',i
     call connect_all_bonds(bergs,ignore_unmatched=.true.)
     nbergs_to_send_e=0; nbergs_to_send_w=0; nbergs_to_send_n=0; nbergs_to_send_s=0
+
+    if (berg_exists(bergs)) print *,'BE: pre mts_pack_in_dir',i
+
+    call mpp_sync_self()
 
     call mts_pack_in_dir(bergs,nbergs_to_send_e,"e")
     call mts_pack_in_dir(bergs,nbergs_to_send_w,"w")
     call mts_pack_in_dir(bergs,nbergs_to_send_n,"n")
     call mts_pack_in_dir(bergs,nbergs_to_send_s,"s")
 
+    if (berg_exists(bergs)) print *,'BE: post mts_pack_in_dir',i
+
     call mts_send_and_receive(bergs,nbergs_to_send_e,nbergs_to_send_w,nbergs_to_send_n,nbergs_to_send_s)
+
+    call mpp_sync_self()
+    if (berg_exists(bergs)) print *,'BE: post_mts_send_and_receive',i
   enddo
 
   if (debug) then
     call connect_all_bonds(bergs,ignore_unmatched=.false.,match_bond_pairs=.true.)
   else
+    if (mpp_pe()==6) print *,'connect b',i
     call connect_all_bonds(bergs,ignore_unmatched=.true.,match_bond_pairs=.true.)
+    ! call connect_all_bonds(bergs,ignore_unmatched=.false.,match_bond_pairs=.true.)
+  endif
+
+  if (berg_exists(bergs)) print *,'BE: post-connect'
+
+  if (bergs%tabular_calving) then
+    count_d=0
+    count_k=0
+    do grdj = grd%jsd,grd%jed ;    do grdi = grd%isd,grd%ied
+      this=>bergs%list(grdi,grdj)%first
+      do while (associated(this))
+        if (this%mass_scaling == -1) then
+          ! print *,'berg deleted',mpp_pe(),this%id
+          if (this%id==4294972978) print *,'4294972978 deleted on PE',mpp_pe(),grdi,grdj,this%halo_berg,this%mass_scaling
+          kick_the_bucket=>this
+          this=>this%next
+          call delete_all_bonds(kick_the_bucket)
+          call delete_iceberg_from_list(bergs%list(grdi,grdj)%first,kick_the_bucket)
+          count_d=count_d+1
+        else
+          ! print *,'berg not deleted',mpp_pe(),this%id
+          if (this%id==4294972978) print *,'4294972978 exists on PE',mpp_pe(),grdi,grdj,this%halo_berg,this%mass_scaling
+          count_k=count_k+1
+          this=>this%next
+        endif
+      enddo
+    enddo;enddo
+    if (count_k+count_d>0) then
+      print *,'PE',mpp_pe(),'bergs kept', count_k, 'bergs deleted',count_d
+    endif
   endif
 
   call set_conglom_ids(bergs)
@@ -2589,7 +2637,46 @@ integer :: nbergs_to_send_n, nbergs_to_send_s
     call show_all_bonds(bergs)
   endif
 
+  if (berg_exists(bergs)) print *,'BE: transfer_mts_bergs'
 end subroutine transfer_mts_bergs
+
+function berg_exists(bergs)
+  ! Arguments
+  type(logical) :: berg_exists
+  type(icebergs), pointer :: bergs !< Container for all types and memory
+  type(icebergs_gridded), pointer :: grd
+  integer :: grdi,grdj,bond_count
+  type(bond), pointer :: bond
+  type(iceberg), pointer :: this
+
+  berg_exists=.false.
+  grd=>bergs%grd
+  bond_count=0
+  do grdj = grd%jsd,grd%jed ;  do grdi = grd%isd,grd%ied
+    this=>bergs%list(grdi,grdj)%first
+    do while (associated(this))
+      if (abs(this%id)==4294972978) then
+        if (this%id>0) then
+          print *,'BERG 4294972978 EXISTS on PE',mpp_pe(),grdi,grdj,this%halo_berg,this%mass_scaling
+        else
+          print *,'-BERG 4294972978 EXISTS on PE',mpp_pe(),grdi,grdj,this%halo_berg,this%mass_scaling
+        endif
+        berg_exists=.true.
+      endif
+      bond=>this%first_bond
+      do while (associated(bond))
+        if (abs(bond%other_id) .eq. 4294972978) bond_count=bond_count+1
+        bond=>bond%next_bond
+      enddo
+      this=>this%next
+    enddo
+  enddo; enddo
+  if (bond_count>0) then
+    print *,''
+    print *,'count of bergs bonded to 4294972978',bond_count,'on PE',mpp_pe()
+  endif
+
+end function berg_exists
 
 !> For the MTS scheme, packs bergs for transfers between PEs to the N,S,E, and W
 subroutine mts_pack_in_dir(bergs, nbergs_to_send, dir)
@@ -2608,7 +2695,7 @@ subroutine mts_pack_in_dir(bergs, nbergs_to_send, dir)
   integer :: inhs,inhe,jnhs,jnhe
   real :: pfix !<used to adjust for periodicity
   real :: x(4),y(4) !corners of a box from within to send bergs from this PE to another PE
-  ! real :: rhc(4)
+  !real :: rhc(4)
   real :: clat,clon,dlat,dlon,r_dist
   integer :: current_conglom_id
   real :: current_halo_id
@@ -2755,18 +2842,22 @@ subroutine mts_pack_in_dir(bergs, nbergs_to_send, dir)
             nbergs_to_send=nbergs_to_send+1
             select case (dir)
             case ("s")
+              if (abs(berg%id)==4294972978) print *,'BERG 4294972978 packed to send S from edgecontact',mpp_pe()
               berg%conglom_id=2
               call pack_berg_into_buffer2(berg, bergs%obuffer_s, nbergs_to_send, bergs%max_bonds)
               berg%conglom_id=current_conglom_id+1
             case ("n")
+              if (abs(berg%id)==4294972978) print *,'BERG 4294972978 packed to send N from edgecontact',mpp_pe()
               berg%conglom_id=1
               call pack_berg_into_buffer2(berg, bergs%obuffer_n, nbergs_to_send, bergs%max_bonds)
               berg%conglom_id=current_conglom_id+2
             case ("w")
+              if (abs(berg%id)==4294972978) print *,'BERG 4294972978 packed to send W from edgecontact',mpp_pe()
               berg%lon=berg%lon-pfix; berg%conglom_id=4
               call pack_berg_into_buffer2(berg, bergs%obuffer_w, nbergs_to_send, bergs%max_bonds)
               berg%lon=berg%lon+pfix; berg%conglom_id=current_conglom_id+8
             case ("e")
+              if (abs(berg%id)==4294972978) print *,'BERG 4294972978 packed to send E from edgecontact',mpp_pe()
               berg%lon=berg%lon-pfix; berg%conglom_id=8
               call pack_berg_into_buffer2(berg, bergs%obuffer_e, nbergs_to_send, bergs%max_bonds)
               berg%lon=berg%lon+pfix; berg%conglom_id=current_conglom_id+4
@@ -2791,7 +2882,7 @@ recursive subroutine mts_mark_and_pack_halo_and_congloms(bergs, berg, dir, nberg
   real :: x(4),y(4) !corners of a box from within to send bergs from this PE to another PE
   ! real :: rhc(4) !<lat/lon bounds of halo region for receiving cell
   ! Local variables
-  type(iceberg), pointer :: other_berg
+  type(iceberg), pointer :: other_berg, this
   type(bond) , pointer :: current_bond
   integer :: k !<bond counter
   integer :: current_conglom_id
@@ -2816,18 +2907,22 @@ recursive subroutine mts_mark_and_pack_halo_and_congloms(bergs, berg, dir, nberg
 
     select case (dir)
     case ("e")
+      if (abs(berg%id)==4294972978) print *,'BERG 4294972978 packed to send E',mpp_pe()
       berg%conglom_id=8;                    berg%lon=berg%lon-pfix;
       call pack_berg_into_buffer2(berg,bergs%obuffer_e, nbergs_to_send, bergs%max_bonds)
       berg%conglom_id=current_conglom_id+4; berg%lon=berg%lon+pfix;
     case ("w")
+      if (abs(berg%id)==4294972978) print *,'BERG 4294972978 packed to send W',mpp_pe()
       berg%conglom_id=4;                    berg%lon=berg%lon-pfix;
       call pack_berg_into_buffer2(berg,bergs%obuffer_w, nbergs_to_send, bergs%max_bonds)
       berg%conglom_id=current_conglom_id+8; berg%lon=berg%lon+pfix;
     case ("n")
+      if (abs(berg%id)==4294972978) print *,'BERG 4294972978 packed to send N',mpp_pe()
       berg%conglom_id=1
       call pack_berg_into_buffer2(berg,bergs%obuffer_n, nbergs_to_send, bergs%max_bonds)
       berg%conglom_id=current_conglom_id+2
     case ("s")
+      if (abs(berg%id)==4294972978) print *,'BERG 4294972978 packed to send S',mpp_pe()
       berg%conglom_id=2
       call pack_berg_into_buffer2(berg,bergs%obuffer_s, nbergs_to_send, bergs%max_bonds)
       berg%conglom_id=current_conglom_id+1
@@ -2846,6 +2941,25 @@ recursive subroutine mts_mark_and_pack_halo_and_congloms(bergs, berg, dir, nberg
     if  (associated(current_bond%other_berg)) then
       other_berg=>current_bond%other_berg
       if (other_berg%id>0) then
+        if (other_berg%id==4294972978) then
+          print *,'BERG 4294972978 marked to send from connection',mpp_pe(),'by berg',berg%id,'. CID',other_berg%conglom_id
+          print *,'sending berg stats',mpp_pe(),berg%id,berg%lon,berg%lat,berg%ine,berg%jne
+
+          if (.not. berg_exists(bergs)) then
+            print *,'but berg exists still claims its not here'
+            this=>bergs%list(berg%ine,berg%jne)%first
+            if (.not. associated(this)) print *,'there arent even any bergs in the cell....'
+            do while (associated(this))
+              if (this%id==berg%id) then
+                print *,'sending berg found',mpp_pe(),this%id
+                this=>this%next
+              else
+                print *,'berg in cell',mpp_pe(),this%id
+                this=>this%next
+              endif
+            enddo
+          endif
+        endif
         call mts_mark_and_pack_halo_and_congloms(bergs,other_berg,dir,nbergs_to_send,pfix,x,y)!,rhc)
       endif
     endif
@@ -2939,18 +3053,22 @@ recursive subroutine mts_pack_contact_bergs(bergs, berg, dir, pfix, nbergs_to_se
               nbergs_to_send=nbergs_to_send+1
               select case (dir)
               case ("s")
+                if (abs(other_berg%id)==4294972978) print *,'BERG 4294972978 packed to send S from contact',mpp_pe()
                 other_berg%conglom_id=2
                 call pack_berg_into_buffer2(other_berg,bergs%obuffer_s, nbergs_to_send, bergs%max_bonds)
                 other_berg%conglom_id=current_conglom_id+1
               case ("n")
+                if (abs(other_berg%id)==4294972978) print *,'BERG 4294972978 packed to send N from contact',mpp_pe()
                 other_berg%conglom_id=1
                 call pack_berg_into_buffer2(other_berg,bergs%obuffer_n, nbergs_to_send, bergs%max_bonds)
                 other_berg%conglom_id=current_conglom_id+2
               case ("w")
+                if (abs(other_berg%id)==4294972978) print *,'BERG 4294972978 packed to send W from contact',mpp_pe()
                 other_berg%lon=other_berg%lon-pfix; other_berg%conglom_id=4
                 call pack_berg_into_buffer2(other_berg,bergs%obuffer_w, nbergs_to_send, bergs%max_bonds)
                 other_berg%lon=other_berg%lon+pfix; other_berg%conglom_id=current_conglom_id+8
               case ("e")
+                if (abs(other_berg%id)==4294972978) print *,'BERG 4294972978 packed to send E from contact',mpp_pe()
                 other_berg%lon=other_berg%lon-pfix; other_berg%conglom_id=8
                 call pack_berg_into_buffer2(other_berg,bergs%obuffer_e, nbergs_to_send, bergs%max_bonds)
                 other_berg%lon=other_berg%lon+pfix; other_berg%conglom_id=current_conglom_id+4
@@ -3254,6 +3372,8 @@ subroutine mts_send_and_receive(bergs, nbergs_to_send_e, nbergs_to_send_w, nberg
   ! For convenience
   grd=>bergs%grd
 
+  call mpp_sync_self()
+
   ! Send bergs east
   if (grd%pe_E.ne.NULL_PE) then
     call mpp_send(nbergs_to_send_e, plen=1, to_pe=grd%pe_E, tag=COMM_TAG_1)
@@ -3390,15 +3510,14 @@ subroutine delete_all_bergs_in_list(bergs, grdj, grdi, tabular_calving_only)
   type(iceberg), pointer :: kick_the_bucket, this
   logical :: new_tab_only
 
+  new_tab_only=.false.
   if (present(tabular_calving_only)) then
     new_tab_only=tabular_calving_only
-  else
-    new_tab_only=.false.
   endif
 
   this=>bergs%list(grdi,grdj)%first
   do while (associated(this))
-    if (new_tab_only .and. this%static_berg>=0) then! .and. this%static_berg<2) then
+    if (new_tab_only .and. this%static_berg>=0 .and. this%halo_berg<=1) then! .and. this%static_berg<2) then
       this=>this%next
     else
       kick_the_bucket=>this
@@ -3645,7 +3764,7 @@ integer :: grdi, grdj
     do grdj = grd%jsc,grd%jec ; do grdi = grd%isc,grd%iec
       this=>bergs%list(grdi,grdj)%first
       do while (associated(this))
-        call check_position(grd, this, 'exchange (bot)', grdi, grdj)
+        call check_position(bergs, grd, this, 'exchange (bot)', grdi, grdj)
         if (this%ine.lt.bergs%grd%isc .or. &
             this%ine.gt.bergs%grd%iec .or. &
             this%jne.lt.bergs%grd%jsc .or. &
@@ -3870,9 +3989,9 @@ stderrunit = stderr()
           !write(stderrunit,*) , 'Clearing', berg%id, matching_bond%other_id,other_berg%id, mpp_pe()
           matching_bond%other_berg=>null()
           matching_bond=>null()
-          if (iceberg_bonds_on) then !should not find bonds unless they are on anyway, but just to be safe...
-            if (other_berg%n_bonds>0) other_berg%n_bonds=other_berg%n_bonds-1
-          endif
+          ! if (iceberg_bonds_on) then !should not find bonds unless they are on anyway, but just to be safe...
+          !   if (other_berg%n_bonds>0) other_berg%n_bonds=other_berg%n_bonds-1
+          ! endif
         else
           matching_bond=>matching_bond%next_bond
         endif
@@ -5143,35 +5262,56 @@ real :: elem_sum, l_sum, w_sum
 
   if (.not. bergs%constant_interaction_LW) return
 
-  elem_sum = 0. !counter for number of elements
-  l_sum = 0.    !sum of lengths
-  w_sum = 0.    !sum of widths
-  grd=>bergs%grd
-  do grdj=grd%jsc,grd%jec ; do grdi=grd%isc,grd%iec!loop over all cells
-    this=>bergs%list(grdi,grdj)%first
-    do while (associated(this)) ! loop over all bergs in cell
-      elem_sum=elem_sum+1.
-      l_sum=l_sum+this%length
-      w_sum=w_sum+this%width
-      this=>this%next
-    enddo
-  enddo;enddo
-
-  call mpp_sum(elem_sum); call mpp_sum(l_sum); call mpp_sum(w_sum)
-  bergs%constant_length = l_sum/elem_sum
-  bergs%constant_width  = w_sum/elem_sum
-
-  bergs%constant_area=bergs%constant_length*bergs%constant_width
-  if (bergs%hexagonal_icebergs) then
-    bergs%constant_radius=sqrt(bergs%constant_area/(2.*sqrt(3.)))
-  else
-    if (bergs%iceberg_bonds_on) then
-      bergs%constant_radius=0.5*sqrt(bergs%constant_area)
+  !For tabular calving from ice shelves, the constant length and width may be
+  !set from a constant calving radius
+  if (bergs%tabular_calving .and. bergs%constant_radius_IS_berg>0) then
+    bergs%constant_radius=bergs%constant_radius_IS_berg
+    if (bergs%hexagonal_icebergs) then
+      bergs%constant_length=sqrt((2.0*sqrt(3.0)*bergs%constant_radius_IS_berg**2.0))
+      bergs%constant_width=bergs%constant_length
+      bergs%constant_area=bergs%constant_length*bergs%constant_width
     else
-      bergs%constant_radius=sqrt(bergs%constant_area/pi) ! Interaction radius of the iceberg (assuming circular icebergs)
+      if (bergs%iceberg_bonds_on) then
+        bergs%constant_length=2.0*bergs%constant_radius_IS_berg
+        bergs%constant_width=bergs%constant_length
+        bergs%constant_area=bergs%constant_length*bergs%constant_width
+      else
+        !assume circular bergs
+        bergs%constant_area=pi*bergs%constant_radius**2.0
+        bergs%constant_length=sqrt(bergs%constant_area)
+        bergs%constant_width=bergs%constant_length
+      endif
+    endif
+  else !not tabular calving with constant_radius_IS_berg>0
+    elem_sum = 0. !counter for number of elements
+    l_sum = 0.    !sum of lengths
+    w_sum = 0.    !sum of widths
+    grd=>bergs%grd
+    do grdj=grd%jsc,grd%jec ; do grdi=grd%isc,grd%iec!loop over all cells
+      this=>bergs%list(grdi,grdj)%first
+      do while (associated(this)) ! loop over all bergs in cell
+        elem_sum=elem_sum+1.
+        l_sum=l_sum+this%length
+        w_sum=w_sum+this%width
+        this=>this%next
+      enddo
+    enddo;enddo
+
+    call mpp_sum(elem_sum); call mpp_sum(l_sum); call mpp_sum(w_sum)
+    bergs%constant_length = l_sum/elem_sum
+    bergs%constant_width  = w_sum/elem_sum
+
+    bergs%constant_area=bergs%constant_length*bergs%constant_width
+    if (bergs%hexagonal_icebergs) then
+      bergs%constant_radius=sqrt(bergs%constant_area/(2.*sqrt(3.)))
+    else
+      if (bergs%iceberg_bonds_on) then
+        bergs%constant_radius=0.5*sqrt(bergs%constant_area)
+      else
+        bergs%constant_radius=sqrt(bergs%constant_area/pi) ! Interaction radius of the iceberg (assuming circular icebergs)
+      endif
     endif
   endif
-
 end subroutine set_constant_interaction_length_and_width
 
 !> Initialization for the DEM beam tests
@@ -5291,7 +5431,7 @@ end subroutine break_bonds_dem
 
 !> Delete current_bond from the list of its parent berg
 subroutine delete_bond_from_list(berg,bond_to_delete)
-type(iceberg), intent(in), pointer :: berg !<parent berg to bond_to_delete
+type(iceberg), intent(inout), pointer :: berg !<parent berg to bond_to_delete
 type(bond), pointer :: bond_to_delete !<deleting this bond
 type(bond), pointer :: prev,next,current_bond
   prev=>bond_to_delete%prev_bond
@@ -5302,33 +5442,59 @@ type(bond), pointer :: prev,next,current_bond
     berg%first_bond=>next
   endif
   if (associated(next)) next%prev_bond=>prev
+  bond_to_delete%other_berg=>null()
+  bond_to_delete%prev_bond=>null()
+  bond_to_delete%next_bond=>null()
+  bond_to_delete%other_id=0
+  bond_to_delete%bond_trajectory=>null()
+  bond_to_delete%other_bond=>null()
   deallocate(bond_to_delete)
 end subroutine delete_bond_from_list
 
 !> Deletes all bonds associated with an iceberg
 subroutine delete_all_bonds(berg)
-type(iceberg), intent(in), pointer :: berg !<parent berg to delete associated bonds
+type(iceberg), intent(inout), pointer :: berg !<parent berg to delete associated bonds
 type(iceberg), pointer :: other_berg
 type(bond), pointer :: current_bond, matching_bond, kick_the_bucket
+integer :: obbd
 
+obbd=0
 current_bond=>berg%first_bond
 do while (associated(current_bond))
   if (associated(current_bond%other_berg)) then
     other_berg=>current_bond%other_berg
     matching_bond=>other_berg%first_bond
+    if (berg%id==4294972978) then
+      print *,'other_berg%id',other_berg%id,'on PE',mpp_pe()
+      if (.not. associated(matching_bond)) print *,'matching_bond not associated!'
+    endif
     do while (associated(matching_bond))  ! Looping over possible matching bonds in other_berg
       if (matching_bond%other_id .eq. berg%id) then
-        call delete_bond_from_list(other_berg,matching_bond)
-        matching_bond=>null()
+        if (berg%id==4294972978) then
+          obbd=obbd+1
+          print *,'matched bond for other_berg%id',other_berg%id,'on PE',mpp_pe()
+        endif
+        kick_the_bucket=>matching_bond
+        matching_bond=>matching_bond%next_bond
+        call delete_bond_from_list(other_berg,kick_the_bucket)
+        ! matching_bond=>null()
+        other_berg%n_bonds=other_berg%n_bonds-1
       else
+        if (berg%id==4294972978) print *,'matching_bond%other_id',matching_bond%other_id
         matching_bond=>matching_bond%next_bond
       endif
     enddo
+  else
+    if (berg%id==4294972978) print *,'other berg not associated for the bond!',mpp_pe()
   endif
   kick_the_bucket=>current_bond
   current_bond=>current_bond%next_bond
   call delete_bond_from_list(berg,kick_the_bucket)
+  berg%n_bonds=berg%n_bonds-1
 enddo
+if (berg%id==4294972978) then
+  print *,'remaining bonds of deleting berg',berg%id,'=',berg%n_bonds, 'matched bonds deleted = ',obbd
+endif
 end subroutine delete_all_bonds
 
 !> Bond two bergs together
@@ -5516,6 +5682,7 @@ bond_matched=.false.
   call update_latlon(bergs)
 
   do grdj = grd%jsd+1,grd%jed ; do grdi = grd%isd+1,grd%ied
+  ! do grdj = grd%jsd,grd%jed ; do grdi = grd%isd,grd%ied
 ! do grdj = grd%jsc,grd%jec ; do grdi = grd%isc,grd%iec  ! Don't connect halo bergs
     berg=>bergs%list(grdi,grdj)%first
     do while (associated(berg)) ! loop over all bergs
@@ -5617,6 +5784,7 @@ bond_matched=.false.
 
   if (save_bond_forces .and. link_bond_pairs .and. bergs%dem) then
     do grdj = grd%jsd+1,grd%jed ; do grdi = grd%isd+1,grd%ied
+    ! do grdj = grd%jsd,grd%jed ; do grdi = grd%isd,grd%ied
       berg=>bergs%list(grdi,grdj)%first
       do while (associated(berg)) ! loop over all bergs
       if (new_tab_only .and. berg%static_berg>=0) then; berg=>berg%next; cycle; endif
@@ -5637,6 +5805,7 @@ bond_matched=.false.
                   endif
                 enddo
               else
+                print *,'pe',mpp_pe(),'berg id,latlon', berg%id, berg%lat, berg%lon, 'missing berg',current_bond%other_id
                 call error_mesg('KID, connect_all_bonds', 'A bond is missing its second berg !!!', WARNING)
               endif
             endif
@@ -5978,9 +6147,7 @@ endif
             posn%byn_fast=this%byn_fast
           endif
 
-          if (iceberg_bonds_on) then
-            posn%n_bonds=this%n_bonds
-          end if
+          if (iceberg_bonds_on) posn%n_bonds=this%n_bonds
 
           if (dem) then
             posn%ang_vel=this%ang_vel
@@ -7197,8 +7364,9 @@ real ::Lx_2
 end function apply_modulo_around_point
 
 !> Checks that a berg's position metrics are consistent
-subroutine check_position(grd, berg, label, il, jl)
+subroutine check_position(bergs, grd, berg, label, il, jl)
 ! Arguments
+type(icebergs), pointer :: bergs !< Container for all types and memory
 type(icebergs_gridded), pointer :: grd !< Container for gridded fields
 type(iceberg), pointer :: berg !< Berg to check
 character(len=*) :: label !< Label to add to messages
@@ -7219,7 +7387,7 @@ integer :: stderrunit
     call print_berg(stderrunit, berg, 'check_position', il, jl)
     call error_mesg('KID, check_position, '//trim(label),'berg has inconsistent xi,yj!',FATAL)
   endif
-  if (grd%msk(berg%ine, berg%jne)==0.) then
+  if ((.not. bergs%tabular_calving) .and. grd%msk(berg%ine, berg%jne)==0.) then
     call print_berg(stderrunit, berg, 'check_position, '//trim(label), il, jl)
     call error_mesg('KID, check_position, '//trim(label),'berg is in a land cell!',FATAL)
   endif

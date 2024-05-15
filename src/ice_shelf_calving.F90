@@ -14,7 +14,7 @@ use ice_bergs_framework, only : hexagon_into_quadrants_using_triangles, Rearth
 use ice_bergs_framework, only : square_into_quadrants_using_triangles
 use ice_bergs_framework, only : initialize_iceberg_bonds, count_bonds
 use ice_bergs_framework, only : find_cell, pos_within_cell, generate_id
-use ice_bergs_framework, only : debug, footloose, connect_all_bonds, delete_all_bonds
+use ice_bergs_framework, only : debug, footloose, connect_all_bonds, delete_all_bonds, berg_exists
 use ice_bergs_framework, only : update_halo_calved_tabular_icebergs, assign_n_bonds,transfer_mts_bergs
 use fms_mod, only : error_mesg, FATAL, WARNING, stderr
 
@@ -356,6 +356,7 @@ recursive subroutine update_berg_lists_on_all_pes(grd, TC)
   ! endif
 
   ! print *,'pe,berg_count,nbergs',mpp_pe(),TC%berg_pe_count,nbergs(1:4)
+  call mpp_sync_self()
 
   changes = 1
   localchanges = 1
@@ -733,19 +734,23 @@ subroutine ice_shelf_to_bonded_bergs(bergs, TC)
     ! call transfer_mts_bergs(bergs)
     ! else
     !call update_halo_icebergs(bergs)
+    if (berg_exists(bergs)) print *,'BE: pre connect CALVING'
 
     !includes all particles that just initialized
     call connect_all_bonds(bergs, match_bond_pairs=.true.,tabular_calving_only=.true.)
     ! endif
-    nbonds=0
-    check_bond_quality=.True.
     !includes all particles that just initialized
     if (debug) then
+      nbonds=0
+      check_bond_quality=.True.
       call count_bonds(bergs, nbonds,check_bond_quality,tabular_calving_only=.true.)
     endif
 
     !only includes particles that just initialized
     call assign_n_bonds(bergs,tabular_calving_only=.true.)
+
+  if (berg_exists(bergs)) print *,'BE: post bonding CALVING'
+
   endif
 
   !This can be done with the rest of the bergs?
@@ -814,13 +819,13 @@ subroutine new_tabular_bergs_thickness_and_pressure(bergs)
   real, dimension(:,:), pointer :: frac_cberg_calved ! Cell fraction of fully-calved bonded bergs from the ice sheet [nondim]
   real, dimension(:,:), pointer :: frac_cberg ! Cell fraction of partially-calved bonded bergs from the ice sheet [nondim]
   integer :: grdi, grdj, c1
-  integer :: count, max_count
+  integer :: count, max_count, bcount, bcount_r, bcount_d
   real :: resid_area
   real, allocatable :: pf_area(:,:,:)
   real :: yUxL, yUxC, yUxR
   real :: yCxL, yCxC, yCxR
   real :: yDxL, yDxC, yDxR
-  real :: T_scale
+  real :: T_scale, min_T_scale
 
   !A newly-calving iKID conglomerate may have both edge particles (i.e. with empty bond pairs) and
   !interior particles (i.e. with no empty bond pairs) that both overlap partially-filled ice-shelf
@@ -931,7 +936,7 @@ subroutine new_tabular_bergs_thickness_and_pressure(bergs)
           berg%id=abs(berg%id)
 
           if (grdj >= grd%jsc-1 .and. grdj <= grd%jec+1 .and. grdi >= grd%isc-1 .and. grdi <= grd%iec+1 .and. &
-              berg%static_berg<=3 .and. berg%static_berg>2 .and. int(berg%sss)==count) then
+              berg%static_berg<=3 .and. berg%static_berg>2 .and. int(berg%sss)==count .and. berg%halo_berg<=1) then
 
             !add berg area in cell to pf_area
             yUxL = berg%sst
@@ -951,6 +956,7 @@ subroutine new_tabular_bergs_thickness_and_pressure(bergs)
         enddo
       enddo; enddo
       call sum_up_spread_fields(bergs, pf_area(grd%isc:grd%iec,grd%jsc:grd%jec,count), 'pf_area', ignore_mask_in=.true.)
+      !save for future diagnostics? Size of TC%saved_pf_area is (grd%isd:grd%ied,grd%jsd:grd%jed,10)
       if (count<=10 .and. grd%id_pf_area>0) &
         TC%saved_pf_area(grd%isc:grd%iec,grd%jsc:grd%jec,count)=pf_area(grd%isc:grd%iec,grd%jsc:grd%jec,count)
     enddo
@@ -984,17 +990,22 @@ subroutine new_tabular_bergs_thickness_and_pressure(bergs)
     enddo; enddo
   endif !if max_count>0
 
+  bcount=0
+  bcount_r=0
+  bcount_d=0
+  min_T_scale=1
+  T_scale=0
   !4) Using the scalings saved on pf_area, calculate thickness and mass scaling on the partially-full particles.
   !!  Interpolate berg thickness and time-scaling (percent berg pressure vs ice-shelf pressure) to grid.
   do grdj = grd%jsc-1,grd%jec+1 ; do grdi = grd%isc-1,grd%iec+1
-
     berg=>bergs%list(grdi,grdj)%first
     do while (associated(berg))
-
-      if (berg%static_berg<2) then !regular (non-calving) static or dynamic bergs
-        !cycle
+      if (berg%static_berg<2 .or. berg%halo_berg>1) then
+        !non-calving berg or, if MTS, a berg that lies outside the current PE's grid, but is part of a conglomerate that
+        !overlaps the current PE
         berg=>berg%next
       else
+        bcount=bcount+1
 
         yUxL = berg%sst
         yUxC = berg%uo
@@ -1077,18 +1088,29 @@ subroutine new_tabular_bergs_thickness_and_pressure(bergs)
           !--Then, implement frac_shelf as--:
           !frac_shelf_new = max(frac_shelf - frac_cberg,0)
           !(3) When interpolation time is up, the calving mask and associated ice shelf needs to be eliminated
-          if (T_scale==1) then !berg is old enough to now evolve as a dynamic berg, but will be deleted if massless
 
+          min_T_scale=min(T_scale,min_T_scale)
+
+          if (T_scale==1) then !berg is old enough to now evolve as a dynamic berg, but will be deleted if massless
             if (berg%mass_scaling==0) then
-              !remove massless particle
-              other_berg=>berg
-              berg=>berg%next
-              ! call delete_iceberg_from_list(bergs%list(grdi,grdj)%first,other_berg)
-              call delete_all_bonds(other_berg)
-              call delete_iceberg_from_list(bergs%list(grdi,grdj)%first,other_berg)
+              if (bergs%mts) then
+                !mark the berg for deletion after halo transfers
+                berg%static_berg=0.
+                berg%mass_scaling=-1
+                berg=>berg%next
+              else
+                !remove massless particle
+                other_berg=>berg
+                berg=>berg%next
+                call delete_all_bonds(other_berg)
+                call delete_iceberg_from_list(bergs%list(grdi,grdj)%first,other_berg)
+              endif
+
+              bcount_d=bcount_d+1
             else
               !Particle has fully calved from the ice shelf, and will evolve as a dynamic iceberg
               !The section of the ice shelf from where the particle calved will be eliminated
+              bcount_r=bcount_r+1
               berg%static_berg=0.
               call spread_variable_across_cells(grd, grd%frac_cberg_calved, berg%length * berg%width * berg%mass_scaling, &
                                                 grdi, grdj, yDxL, yDxC,yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR, 1.0)
@@ -1111,15 +1133,20 @@ subroutine new_tabular_bergs_thickness_and_pressure(bergs)
     enddo !do while associated berg
   enddo; enddo
 
+  !You need to delete particles from the list after transferring them between PEs again, so that the other PEs can unbond from
+  !them> So maybe you can do a transfer of only those bergs slated to be deleted. Or just transfer the id's and grid cells
+  !of the bergs that must be deleted. Or does this work itself out with paralellization anyway?
+
+
   ! if (mpp_pe().eq.mpp_root_pe()) print *,'Tscale',T_scale
-  if (T_scale/=0) print *,'pe,T_scale',mpp_pe(),T_scale
+  if (T_scale/=0) print *,'pe',mpp_pe(),'T_scale',T_scale,'min_T_scale',min_T_scale,'bcount',bcount,'bcount_r',bcount_r,'bcount_d',bcount_d
   call sum_up_spread_fields(bergs, frac_cberg_calved(grd%isc:grd%iec,grd%jsc:grd%jec), 'frac_cberg_calved', ignore_mask_in=.true.)
   call sum_up_spread_fields(bergs, frac_cberg(grd%isc:grd%iec,grd%jsc:grd%jec)       , 'frac_cberg'       , ignore_mask_in=.true.)
 
   !Adjust frac_cberg_calved and the iceberg mask
   do grdj = grd%jsc,grd%jec ; do grdi = grd%isc,grd%iec
     !In the ice shelf code, cells with frac_cberg_calved == frac_shelf will cause all ice shelf in the cell to be eliminated.
-    !Alternatively, all ice shelf will be eliminated in the cell will also be eliminated if frac_cberg_calved == 1.
+    !Alternatively, all ice shelf in the cell will also be eliminated if frac_cberg_calved == 1.
     !Here, account for potential round-off error so that frac_cberg_calved definitely equals frac_shelf (or 1) where needed -- this should
     !occur wherever the calve mask fraction (saved on the cell's particles hi field) equals 1.
     if (frac_cberg(grdi,grdj)>1) frac_cberg(grdi,grdj)=1
@@ -1128,7 +1155,7 @@ subroutine new_tabular_bergs_thickness_and_pressure(bergs)
       (frac_cberg_calved(grdi,grdj)<frac_shelf(grdi,grdj) .or. frac_shelf(grdi,grdj)/=1)) then
       berg=>bergs%list(grdi,grdj)%first
       do while (associated(berg))
-        if (berg%hi==1) then
+        if (berg%hi>=1) then
           !All ice in this cell should calve fully. Either set the frac_cberg_calved to frac_shelf, or simply set to 1,
           !Setting it to 1 is a bit more helpful in diagnostic output to easily differentiate between full (1) and partial (<1)
           !calve cells. While it is possible (though unlikely) that this statement could be triggered by a non-calving (already released)

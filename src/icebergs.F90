@@ -60,7 +60,6 @@ use ice_bergs_framework, only: sum_up_spread_fields, sum_up_spread_fields, Area_
 use ice_bergs_framework, only: point_in_triangle, point_in_interval, point_is_on_the_line
 use ice_bergs_framework, only: convert_from_grid_to_meters, convert_from_meters_to_grid
 use ice_bergs_framework, only: spread_variable_across_cells, find_orientation_using_iceberg_bonds
-use ice_bergs_framework, only: berg_exists
 
 use ice_bergs_io,        only: ice_bergs_io_init, write_restart_bergs, write_trajectory, write_bond_trajectory
 use ice_bergs_io,        only: read_restart_bergs, read_restart_calving
@@ -176,6 +175,7 @@ subroutine icebergs_init(bergs, &
   endif
   allocate( grd%melt_by_ice_sheet_basin(grd%isd:grd%ied, grd%jsd:grd%jed, bergs%nbasins) )
   grd%melt_by_ice_sheet_basin(:,:,:)=0.
+  call mpp_update_domains(bergs%grd%ocean_depth, bergs%grd%domain)
 
   if (bergs%iceberg_bonds_on) then
     if (bergs%manually_initialize_bonds) then
@@ -4936,7 +4936,6 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
 
   if (.not.bergs%Static_icebergs) then
 !    call assign_n_bonds(bergs) ! for debugging tabular calving!
-    if (berg_exists(bergs)) print *,'BE: pre-evolve-icebergs'
     if (bergs%mts) then
       call evolve_icebergs_mts(bergs)
     else
@@ -4963,19 +4962,14 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   if (bergs%footloose) call footloose_calving(bergs, time)
   call mpp_clock_end(bergs%clock_fl1)
 
-  if (berg_exists(bergs)) print *,'BE: post_send_bergs_to_other_pes'
-
   ! Calving of tabular bonded bergs
-  ! TODO: does this make sense here?
   if (bergs%tabular_calving) then
     call process_tabular_calving(bergs)
-    if (bergs%iceberg_bonds_on)  call  bond_address_update(bergs)
+    !if (bergs%iceberg_bonds_on)  call  bond_address_update(bergs)
     !return gridded variables associated with tabular calving
     frac_cberg_calved(:,:)=TC%frac_cberg_calved(grd%isc:grd%iec,grd%jsc:grd%jec)
     frac_cberg(:,:)       =TC%frac_cberg(grd%isc:grd%iec,grd%jsc:grd%jec)
   endif
-
-  if (berg_exists(bergs)) print *,'BE: post_process_tabular_calving'
 
   call mpp_clock_begin(bergs%clock_com2)
   if (bergs%mts) then
@@ -6544,10 +6538,10 @@ subroutine evolve_icebergs_mts(bergs)
         xi=berg%xi     ; yj=berg%yj
         ! finalize new iceberg positions and index
         call adjust_index_and_ground(grd, lonn, latn, uveln, vveln, i, j, xi, yj, bounced, error_flag, berg%id)
-        if (xi .ne. xi) then
-          print *,'id',berg%id,'EIM xi0',berg%xi,'xi1',xi,'u,v',uveln,vveln,'lonlat',berg%lon,berg%lat,&
-            'msk0',grd%msk(berg%ine,berg%jne),'msk1',grd%msk(i,j),'i,j 0',berg%ine,berg%jne,'i,j 1',i,j,'lonn,latn',lonn,latn
-        endif
+!!$        if (xi .ne. xi) then
+!!$          print *,'id',berg%id,'EIM xi0',berg%xi,'xi1',xi,'u,v',uveln,vveln,'lonlat',berg%lon,berg%lat,&
+!!$            'msk0',grd%msk(berg%ine,berg%jne),'msk1',grd%msk(i,j),'i,j 0',berg%ine,berg%jne,'i,j 1',i,j,'lonn,latn',lonn,latn
+!!$        endif
         berg%lon=lonn      ;  berg%lat=latn
         berg%lon_old=lonn  ;  berg%lat_old=latn
         berg%ine=i    ;  berg%jne=j

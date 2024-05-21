@@ -1603,12 +1603,6 @@ endif
 
   if (present(tabular_calving)) then
     bergs%tabular_calving=tabular_calving
-  !   if (bergs%tabular_calving) then
-  !     if (.not. (bergs%mts .and. bergs%dem .and. (.not. bergs%old_interp_flds_order))) then
-  !       call error_mesg('KID, ice_bergs_framework_init', &
-  !         'tabular calving requires (mts .and. dem .and. (.not. old_interp_flds_order))!', FATAL)
-  !     endif
-  !   endif
   else
     bergs%tabular_calving=.false.
   endif
@@ -2526,8 +2520,6 @@ integer :: count_d, count_k
   grd=>bergs%grd ! for convenience
   stderrunit = stderr() ! Get the stderr unit number
 
-  if (berg_exists(bergs)) print *,'BE: pre clear halo'
-
   ! Step 1: Clear the current halos
   do grdj = grd%jsd,grd%jsc-1 ;  do grdi = grd%isd,grd%ied
     call delete_all_bergs_in_list(bergs,grdj,grdi)
@@ -2560,15 +2552,10 @@ integer :: count_d, count_k
     enddo
   enddo;enddo
 
-  if (berg_exists(bergs)) print *,'BE: pre connect'
-
   !Copy bergs between PEs
   do i = 1,2 !run twice to account for diagonal transfers and guarantee robust transfers of conglomerates
-    if (mpp_pe()==6) print *,'connect a',i
     call connect_all_bonds(bergs,ignore_unmatched=.true.)
     nbergs_to_send_e=0; nbergs_to_send_w=0; nbergs_to_send_n=0; nbergs_to_send_s=0
-
-    if (berg_exists(bergs)) print *,'BE: pre mts_pack_in_dir',i
 
     call mpp_sync_self()
 
@@ -2577,23 +2564,17 @@ integer :: count_d, count_k
     call mts_pack_in_dir(bergs,nbergs_to_send_n,"n")
     call mts_pack_in_dir(bergs,nbergs_to_send_s,"s")
 
-    if (berg_exists(bergs)) print *,'BE: post mts_pack_in_dir',i
-
     call mts_send_and_receive(bergs,nbergs_to_send_e,nbergs_to_send_w,nbergs_to_send_n,nbergs_to_send_s)
 
     call mpp_sync_self()
-    if (berg_exists(bergs)) print *,'BE: post_mts_send_and_receive',i
   enddo
 
   if (debug) then
     call connect_all_bonds(bergs,ignore_unmatched=.false.,match_bond_pairs=.true.)
   else
-    if (mpp_pe()==6) print *,'connect b',i
     call connect_all_bonds(bergs,ignore_unmatched=.true.,match_bond_pairs=.true.)
     ! call connect_all_bonds(bergs,ignore_unmatched=.false.,match_bond_pairs=.true.)
   endif
-
-  if (berg_exists(bergs)) print *,'BE: post-connect'
 
   if (bergs%tabular_calving) then
     count_d=0
@@ -2603,7 +2584,6 @@ integer :: count_d, count_k
       do while (associated(this))
         if (this%mass_scaling == -1) then
           ! print *,'berg deleted',mpp_pe(),this%id
-          if (this%id==4294972978) print *,'4294972978 deleted on PE',mpp_pe(),grdi,grdj,this%halo_berg,this%mass_scaling
           kick_the_bucket=>this
           this=>this%next
           call delete_all_bonds(kick_the_bucket)
@@ -2611,14 +2591,12 @@ integer :: count_d, count_k
           count_d=count_d+1
         else
           ! print *,'berg not deleted',mpp_pe(),this%id
-          if (this%id==4294972978) print *,'4294972978 exists on PE',mpp_pe(),grdi,grdj,this%halo_berg,this%mass_scaling
           count_k=count_k+1
           this=>this%next
         endif
       enddo
     enddo;enddo
     if (count_k+count_d>0) then
-      print *,'PE',mpp_pe(),'bergs kept', count_k, 'bergs deleted',count_d
     endif
   endif
 
@@ -2637,12 +2615,13 @@ integer :: count_d, count_k
     call show_all_bonds(bergs)
   endif
 
-  if (berg_exists(bergs)) print *,'BE: transfer_mts_bergs'
 end subroutine transfer_mts_bergs
 
+!> Debugging function that detects if a berg exists on the current PE within a cell on within any bond
+!! Edit the berg id (default id==4294972978) accordingly within the function
 function berg_exists(bergs)
   ! Arguments
-  type(logical) :: berg_exists
+  type(logical) :: berg_exists !> True if berg is detected
   type(icebergs), pointer :: bergs !< Container for all types and memory
   type(icebergs_gridded), pointer :: grd
   integer :: grdi,grdj,bond_count
@@ -2665,7 +2644,14 @@ function berg_exists(bergs)
       endif
       bond=>this%first_bond
       do while (associated(bond))
-        if (abs(bond%other_id) .eq. 4294972978) bond_count=bond_count+1
+        if (abs(bond%other_id) .eq. 4294972978) then
+          bond_count=bond_count+1
+        elseif (associated(bond%other_berg)) then
+          if (abs(bond%other_berg%id) .eq. 4294972978) then
+            bond_count=bond_count+1
+            print *,'BERG 4294972978 exists as bond%other_berg%id, but not as bond%other_id'
+          endif
+        endif
         bond=>bond%next_bond
       enddo
       this=>this%next
@@ -2842,22 +2828,18 @@ subroutine mts_pack_in_dir(bergs, nbergs_to_send, dir)
             nbergs_to_send=nbergs_to_send+1
             select case (dir)
             case ("s")
-              if (abs(berg%id)==4294972978) print *,'BERG 4294972978 packed to send S from edgecontact',mpp_pe()
               berg%conglom_id=2
               call pack_berg_into_buffer2(berg, bergs%obuffer_s, nbergs_to_send, bergs%max_bonds)
               berg%conglom_id=current_conglom_id+1
             case ("n")
-              if (abs(berg%id)==4294972978) print *,'BERG 4294972978 packed to send N from edgecontact',mpp_pe()
               berg%conglom_id=1
               call pack_berg_into_buffer2(berg, bergs%obuffer_n, nbergs_to_send, bergs%max_bonds)
               berg%conglom_id=current_conglom_id+2
             case ("w")
-              if (abs(berg%id)==4294972978) print *,'BERG 4294972978 packed to send W from edgecontact',mpp_pe()
               berg%lon=berg%lon-pfix; berg%conglom_id=4
               call pack_berg_into_buffer2(berg, bergs%obuffer_w, nbergs_to_send, bergs%max_bonds)
               berg%lon=berg%lon+pfix; berg%conglom_id=current_conglom_id+8
             case ("e")
-              if (abs(berg%id)==4294972978) print *,'BERG 4294972978 packed to send E from edgecontact',mpp_pe()
               berg%lon=berg%lon-pfix; berg%conglom_id=8
               call pack_berg_into_buffer2(berg, bergs%obuffer_e, nbergs_to_send, bergs%max_bonds)
               berg%lon=berg%lon+pfix; berg%conglom_id=current_conglom_id+4
@@ -2887,7 +2869,7 @@ recursive subroutine mts_mark_and_pack_halo_and_congloms(bergs, berg, dir, nberg
   integer :: k !<bond counter
   integer :: current_conglom_id
   real :: current_halo_id
-  logical :: tf
+
   !pack the berg for transfer if it has not been packed already
   if (.not. mts_berg_sent(berg%conglom_id,dir)) then
     current_halo_id=berg%halo_berg; current_conglom_id=berg%conglom_id
@@ -2907,22 +2889,18 @@ recursive subroutine mts_mark_and_pack_halo_and_congloms(bergs, berg, dir, nberg
 
     select case (dir)
     case ("e")
-      if (abs(berg%id)==4294972978) print *,'BERG 4294972978 packed to send E',mpp_pe()
       berg%conglom_id=8;                    berg%lon=berg%lon-pfix;
       call pack_berg_into_buffer2(berg,bergs%obuffer_e, nbergs_to_send, bergs%max_bonds)
       berg%conglom_id=current_conglom_id+4; berg%lon=berg%lon+pfix;
     case ("w")
-      if (abs(berg%id)==4294972978) print *,'BERG 4294972978 packed to send W',mpp_pe()
       berg%conglom_id=4;                    berg%lon=berg%lon-pfix;
       call pack_berg_into_buffer2(berg,bergs%obuffer_w, nbergs_to_send, bergs%max_bonds)
       berg%conglom_id=current_conglom_id+8; berg%lon=berg%lon+pfix;
     case ("n")
-      if (abs(berg%id)==4294972978) print *,'BERG 4294972978 packed to send N',mpp_pe()
       berg%conglom_id=1
       call pack_berg_into_buffer2(berg,bergs%obuffer_n, nbergs_to_send, bergs%max_bonds)
       berg%conglom_id=current_conglom_id+2
     case ("s")
-      if (abs(berg%id)==4294972978) print *,'BERG 4294972978 packed to send S',mpp_pe()
       berg%conglom_id=2
       call pack_berg_into_buffer2(berg,bergs%obuffer_s, nbergs_to_send, bergs%max_bonds)
       berg%conglom_id=current_conglom_id+1
@@ -2941,25 +2919,6 @@ recursive subroutine mts_mark_and_pack_halo_and_congloms(bergs, berg, dir, nberg
     if  (associated(current_bond%other_berg)) then
       other_berg=>current_bond%other_berg
       if (other_berg%id>0) then
-        if (other_berg%id==4294972978) then
-          print *,'BERG 4294972978 marked to send from connection',mpp_pe(),'by berg',berg%id,'. CID',other_berg%conglom_id
-          print *,'sending berg stats',mpp_pe(),berg%id,berg%lon,berg%lat,berg%ine,berg%jne
-
-          if (.not. berg_exists(bergs)) then
-            print *,'but berg exists still claims its not here'
-            this=>bergs%list(berg%ine,berg%jne)%first
-            if (.not. associated(this)) print *,'there arent even any bergs in the cell....'
-            do while (associated(this))
-              if (this%id==berg%id) then
-                print *,'sending berg found',mpp_pe(),this%id
-                this=>this%next
-              else
-                print *,'berg in cell',mpp_pe(),this%id
-                this=>this%next
-              endif
-            enddo
-          endif
-        endif
         call mts_mark_and_pack_halo_and_congloms(bergs,other_berg,dir,nbergs_to_send,pfix,x,y)!,rhc)
       endif
     endif
@@ -3053,22 +3012,18 @@ recursive subroutine mts_pack_contact_bergs(bergs, berg, dir, pfix, nbergs_to_se
               nbergs_to_send=nbergs_to_send+1
               select case (dir)
               case ("s")
-                if (abs(other_berg%id)==4294972978) print *,'BERG 4294972978 packed to send S from contact',mpp_pe()
                 other_berg%conglom_id=2
                 call pack_berg_into_buffer2(other_berg,bergs%obuffer_s, nbergs_to_send, bergs%max_bonds)
                 other_berg%conglom_id=current_conglom_id+1
               case ("n")
-                if (abs(other_berg%id)==4294972978) print *,'BERG 4294972978 packed to send N from contact',mpp_pe()
                 other_berg%conglom_id=1
                 call pack_berg_into_buffer2(other_berg,bergs%obuffer_n, nbergs_to_send, bergs%max_bonds)
                 other_berg%conglom_id=current_conglom_id+2
               case ("w")
-                if (abs(other_berg%id)==4294972978) print *,'BERG 4294972978 packed to send W from contact',mpp_pe()
                 other_berg%lon=other_berg%lon-pfix; other_berg%conglom_id=4
                 call pack_berg_into_buffer2(other_berg,bergs%obuffer_w, nbergs_to_send, bergs%max_bonds)
                 other_berg%lon=other_berg%lon+pfix; other_berg%conglom_id=current_conglom_id+8
               case ("e")
-                if (abs(other_berg%id)==4294972978) print *,'BERG 4294972978 packed to send E from contact',mpp_pe()
                 other_berg%lon=other_berg%lon-pfix; other_berg%conglom_id=8
                 call pack_berg_into_buffer2(other_berg,bergs%obuffer_e, nbergs_to_send, bergs%max_bonds)
                 other_berg%lon=other_berg%lon+pfix; other_berg%conglom_id=current_conglom_id+4
@@ -3508,7 +3463,7 @@ subroutine delete_all_bergs_in_list(bergs, grdj, grdi, tabular_calving_only)
   logical, optional :: tabular_calving_only !< true to only delete tabular bergs that are calving from the ice shelf
   ! Local variables
   type(iceberg), pointer :: kick_the_bucket, this
-  logical :: new_tab_only
+  logical :: new_tab_only !< local version of tabular_calving_only
 
   new_tab_only=.false.
   if (present(tabular_calving_only)) then
@@ -3517,16 +3472,17 @@ subroutine delete_all_bergs_in_list(bergs, grdj, grdi, tabular_calving_only)
 
   this=>bergs%list(grdi,grdj)%first
   do while (associated(this))
-    if (new_tab_only .and. this%static_berg>=0 .and. this%halo_berg<=1) then! .and. this%static_berg<2) then
+    if (new_tab_only .and. this%static_berg>=0 .and. this%halo_berg<=1) then
       this=>this%next
     else
       kick_the_bucket=>this
       this=>this%next
-      call destroy_iceberg(kick_the_bucket)
+      call delete_iceberg_from_list(bergs%list(grdi,grdj)%first,kick_the_bucket)
+      ! call destroy_iceberg(kick_the_bucket)
     endif
    !call delete_iceberg_from_list(bergs%list(grdi,grdj)%first,kick_the_bucket)
   enddo
-  bergs%list(grdi,grdj)%first=>null()
+  ! if (.not. new_tab_only) bergs%list(grdi,grdj)%first=>null()
 end  subroutine delete_all_bergs_in_list
 
 
@@ -5456,45 +5412,29 @@ subroutine delete_all_bonds(berg)
 type(iceberg), intent(inout), pointer :: berg !<parent berg to delete associated bonds
 type(iceberg), pointer :: other_berg
 type(bond), pointer :: current_bond, matching_bond, kick_the_bucket
-integer :: obbd
 
-obbd=0
 current_bond=>berg%first_bond
 do while (associated(current_bond))
   if (associated(current_bond%other_berg)) then
     other_berg=>current_bond%other_berg
     matching_bond=>other_berg%first_bond
-    if (berg%id==4294972978) then
-      print *,'other_berg%id',other_berg%id,'on PE',mpp_pe()
-      if (.not. associated(matching_bond)) print *,'matching_bond not associated!'
-    endif
     do while (associated(matching_bond))  ! Looping over possible matching bonds in other_berg
       if (matching_bond%other_id .eq. berg%id) then
-        if (berg%id==4294972978) then
-          obbd=obbd+1
-          print *,'matched bond for other_berg%id',other_berg%id,'on PE',mpp_pe()
-        endif
         kick_the_bucket=>matching_bond
         matching_bond=>matching_bond%next_bond
         call delete_bond_from_list(other_berg,kick_the_bucket)
         ! matching_bond=>null()
         other_berg%n_bonds=other_berg%n_bonds-1
       else
-        if (berg%id==4294972978) print *,'matching_bond%other_id',matching_bond%other_id
         matching_bond=>matching_bond%next_bond
       endif
     enddo
-  else
-    if (berg%id==4294972978) print *,'other berg not associated for the bond!',mpp_pe()
   endif
   kick_the_bucket=>current_bond
   current_bond=>current_bond%next_bond
   call delete_bond_from_list(berg,kick_the_bucket)
   berg%n_bonds=berg%n_bonds-1
 enddo
-if (berg%id==4294972978) then
-  print *,'remaining bonds of deleting berg',berg%id,'=',berg%n_bonds, 'matched bonds deleted = ',obbd
-endif
 end subroutine delete_all_bonds
 
 !> Bond two bergs together
@@ -5805,7 +5745,6 @@ bond_matched=.false.
                   endif
                 enddo
               else
-                print *,'pe',mpp_pe(),'berg id,latlon', berg%id, berg%lat, berg%lon, 'missing berg',current_bond%other_id
                 call error_mesg('KID, connect_all_bonds', 'A bond is missing its second berg !!!', WARNING)
               endif
             endif

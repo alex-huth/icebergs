@@ -14,7 +14,7 @@ use ice_bergs_framework, only : hexagon_into_quadrants_using_triangles, Rearth
 use ice_bergs_framework, only : square_into_quadrants_using_triangles
 use ice_bergs_framework, only : initialize_iceberg_bonds, count_bonds
 use ice_bergs_framework, only : find_cell, pos_within_cell, generate_id
-use ice_bergs_framework, only : debug, footloose, connect_all_bonds, delete_all_bonds, berg_exists
+use ice_bergs_framework, only : debug, footloose, connect_all_bonds, delete_all_bonds
 use ice_bergs_framework, only : update_halo_calved_tabular_icebergs, assign_n_bonds,transfer_mts_bergs
 use fms_mod, only : error_mesg, FATAL, WARNING, stderr
 
@@ -734,7 +734,6 @@ subroutine ice_shelf_to_bonded_bergs(bergs, TC)
     ! call transfer_mts_bergs(bergs)
     ! else
     !call update_halo_icebergs(bergs)
-    if (berg_exists(bergs)) print *,'BE: pre connect CALVING'
 
     !includes all particles that just initialized
     call connect_all_bonds(bergs, match_bond_pairs=.true.,tabular_calving_only=.true.)
@@ -748,9 +747,6 @@ subroutine ice_shelf_to_bonded_bergs(bergs, TC)
 
     !only includes particles that just initialized
     call assign_n_bonds(bergs,tabular_calving_only=.true.)
-
-  if (berg_exists(bergs)) print *,'BE: post bonding CALVING'
-
   endif
 
   !This can be done with the rest of the bergs?

@@ -50,6 +50,8 @@ use ice_bergs_framework, only: push_bond_posn, append_bond_posn
 use ice_bergs_framework, only: pack_bond_traj_into_buffer2,unpack_bond_traj_from_buffer2
 use ice_bergs_framework, only: dem, iceberg_bonds_on
 use ice_bergs_framework, only: footloose
+! for tabular calving from ice shelves:
+use ice_bergs_framework, only: tabular_calving_global
 
 
 implicit none ; private
@@ -168,6 +170,7 @@ real, allocatable, dimension(:) :: lon,          &
                                    ang_vel,      &
                                    ang_accel,    &
                                    rot,          &
+                                   mask_status,  &
                                    tangd1,       &
                                    tangd2,       &
                                    nstress,      &
@@ -258,6 +261,9 @@ character(len=1), dimension(1) :: dim_names_1d
      allocate(ang_accel(nbergs))
      allocate(rot(nbergs))
    endif
+   if (tabular_calving_global) then
+     allocate(mask_status(nbergs))
+   endif
 
   i = 0
   do grdj = bergs%grd%jsc,bergs%grd%jec ; do grdi = bergs%grd%isc,bergs%grd%iec
@@ -295,6 +301,9 @@ character(len=1), dimension(1) :: dim_names_1d
         ang_vel(i) = this%ang_vel
         ang_accel(i) = this%ang_accel
         rot(i) = this%rot
+      endif
+      if (tabular_calving_global) then
+        mask_status(i) = this%mask_status
       endif
       this=>this%next
     enddo
@@ -393,6 +402,11 @@ character(len=1), dimension(1) :: dim_names_1d
                                      dim_names_1d,longname='dem accumulated rotation',units='rad')
   endif
 
+  if (tabular_calving_global) then
+    call register_restart_field_wrap(fileobj,'mask_status',mask_status,&
+                                     dim_names_1d,longname='tabular calving mask status',units='none')
+  endif
+
   !Checking if any icebergs are static in order to decide whether to save static_berg
   n_static_bergs = 0
   do grdj = bergs%grd%jsc,bergs%grd%jec ; do grdi = bergs%grd%isc,bergs%grd%iec
@@ -456,7 +470,10 @@ character(len=1), dimension(1) :: dim_names_1d
              ang_accel,    &
              rot)
   endif
-
+  if (tabular_calving_global) then
+    deallocate(            &
+             mask_status)
+  endif
   deallocate(           &
              ine,       &
              jne,       &
@@ -704,7 +721,8 @@ real, allocatable, dimension(:) :: lon,          &
                                    byn_fast,     &
                                    ang_vel,      &
                                    ang_accel,    &
-                                   rot
+                                   rot,          &
+                                   mask_status
 
 integer, allocatable, dimension(:) :: ine,        &
                                       jne,        &
@@ -809,6 +827,9 @@ character(len=1), dimension(1) :: dim_names_1d
        allocate(ang_accel(nbergs_in_file))
        allocate(rot(nbergs_in_file))
      endif
+     if (tabular_calving_global) then
+       allocate(localberg%mask_status)
+     endif
 
      call register_restart_field(fileobj,'lon',lon,dim_names_1d)
      call register_restart_field(fileobj,'lat',lat,dim_names_1d)
@@ -857,6 +878,11 @@ character(len=1), dimension(1) :: dim_names_1d
        call register_restart_field(fileobj,'ang_vel'  ,ang_vel  ,dim_names_1d,is_optional=.true.)
        call register_restart_field(fileobj,'ang_accel',ang_accel,dim_names_1d,is_optional=.true.)
        call register_restart_field(fileobj,'rot'      ,rot      ,dim_names_1d,is_optional=.true.)
+     endif
+
+     if (tabular_calving_global) then
+       mask_status = 0
+       call register_restart_field(fileobj,'mask_status',mask_status,dim_names_1d,is_optional=.true.)
      endif
       call read_restart(fileobj)
       call close_file(fileobj)
@@ -943,6 +969,10 @@ character(len=1), dimension(1) :: dim_names_1d
        localberg%rot      =rot(k)
      endif
 
+     if (tabular_calving_global) then
+       localberg%mask_status=grd%msk(ine(k),jne(k))
+     endif
+
       if (really_debug) lres=is_point_in_cell(grd, localberg%lon, localberg%lat, localberg%ine, localberg%jne, explain=.true.)
       lres=pos_within_cell(grd, localberg%lon, localberg%lat, localberg%ine, localberg%jne, localberg%xi, localberg%yj)
       !call add_new_berg_to_list(bergs%first, localberg)
@@ -1001,7 +1031,9 @@ character(len=1), dimension(1) :: dim_names_1d
                ang_accel,    &
                rot)
     endif
-
+    if (tabular_calving_global) then
+      deallocate(mask_status)
+    endif
     if (replace_iceberg_num) then
       deallocate(iceberg_num)
     else
@@ -1076,6 +1108,9 @@ logical :: lres
     allocate(localberg%ang_accel)
     allocate(localberg%rot)
   endif
+  if (tabular_calving_global) then
+    allocate(localberg%mask_status)
+  endif
 
   do j=grd%jsc,grd%jec; do i=grd%isc,grd%iec
     if (grd%msk(i,j)>0. .and. abs(grd%latc(i,j))>80.0) then
@@ -1125,7 +1160,9 @@ logical :: lres
         localberg%ang_accel=0.
         localberg%rot=0.
       endif
-
+      if (tabular_calving_global) then
+        localberg%mask_status=grd%msk(i,j)
+      endif
       !Berg A
       call loc_set_berg_pos(grd, 0.9, 0.5, 1., 0., localberg)
       localberg%id = generate_id(grd, i, j)
@@ -1641,7 +1678,7 @@ integer :: uvelpid,vvelpid
 integer :: uoid, void, uiid, viid, uaid, vaid, sshxid, sshyid, sstid, sssid
 integer :: cnid, hiid, hsid, sbid
 integer :: mid, smid, did, wid, lid, mbid, mflbid, mflbbid, hdid, nbid, odid, flkid
-integer :: axnid,aynid,bxnid,bynid,axnfid,aynfid,bxnfid,bynfid, msid
+integer :: axnid,aynid,bxnid,bynid,axnfid,aynfid,bxnfid,bynfid, msid, tmid
 integer :: avid, aaid, rid
 character(len=70) :: filename
 character(len=7) :: pe_name
@@ -1820,6 +1857,10 @@ integer :: ntrajs_sent_io,ntrajs_rcvd_io
           rid  = inq_varid(ncid, 'rot')
         endif
 
+        if (tabular_calving_global) then
+          tmid = inq_varid(ncid, 'mask_status')
+        endif
+
       endif
     else
       ! Dimensions
@@ -1890,6 +1931,10 @@ integer :: ntrajs_sent_io,ntrajs_rcvd_io
           avid = def_var(ncid, 'ang_vel', NF_DOUBLE, i_dim)
           aaid = def_var(ncid, 'ang_accel', NF_DOUBLE, i_dim)
           rid  = def_var(ncid, 'rot', NF_DOUBLE, i_dim)
+        endif
+
+        if (tabular_calving_global) then
+          tmid  = def_var(ncid, 'mask_status', NF_DOUBLE, i_dim)
         endif
       endif
 
@@ -2010,6 +2055,11 @@ integer :: ntrajs_sent_io,ntrajs_rcvd_io
           call put_att(ncid, rid, 'long_name', 'accumulated rotation')
           call put_att(ncid, rid, 'units', 'rad')
         endif
+
+        if (tabular_calving_global) then
+          call put_att(ncid, tmid, 'long_name', 'mask status')
+          call put_att(ncid, tmid, 'units', 'none')
+        endif
       endif
     endif
 
@@ -2090,6 +2140,10 @@ integer :: ntrajs_sent_io,ntrajs_rcvd_io
           call put_double(ncid, avid, i, this%ang_vel)
           call put_double(ncid, aaid, i, this%ang_accel)
           call put_double(ncid, rid,  i, this%rot)
+        endif
+
+        if (tabular_calving_global) then
+          call put_double(ncid, tmid,  i, this%mask_status)
         endif
 
       endif

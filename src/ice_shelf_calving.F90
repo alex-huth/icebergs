@@ -1172,6 +1172,18 @@ subroutine new_tabular_bergs_thickness_and_pressure(bergs)
   call mpp_update_domains(frac_cberg,        grd%domain, complete=.false.)
   call mpp_update_domains(grd%msk,           grd%domain, complete=.true.)
   if (allocated(pf_area)) deallocate(pf_area)
+
+  if (.not. bergs%mts) then
+    !if bergs%mts, then this is done immediately following process_tabular_calving, within
+    !interp_gridded_fields_to_bergs, so no need to do it here...
+    do grdj = grd%jsc,grd%jec ; do grdi = grd%isc,grd%iec
+      berg=>bergs%list(grdi,grdj)%first
+      do while (associated(berg))
+        berg%mask_status=grd%msk(grdi,grdj)
+        berg=>berg%next
+      enddo
+    enddo; enddo
+  endif
 end subroutine new_tabular_bergs_thickness_and_pressure
 
 !> Initialize (begin calving) a tabular iceberg particle from an ice shelf at the given lat/lon coordinates.
@@ -1236,7 +1248,8 @@ subroutine begin_calving_tabular_iceberg_from_shelf(bergs, grd, lon, lat, calve_
     call error_mesg('KID, calve_icebergs', 'berg xi,yj is not correct!', FATAL)
   endif
 
-  !Ignore bergs on the N and E boundry of the PE, as they will be included in the PEs to the N or E, respectively
+  !Ignore bergs on the N and E boundary of the PE, as they will be included in the PEs to the N or E, respectively
+  !But the find_cell call should not allow bergs to be found on these boundaries, anyway.
   if ((i==grd%iec .and. xi==1) .or. (j==grd%jec .and. yj==1)) return
 
   ! if (grd%msk(i,j)<0.5) then
@@ -1437,6 +1450,11 @@ subroutine begin_calving_tabular_iceberg_from_shelf(bergs, grd, lon, lat, calve_
       if (.not. allocated(newberg%rot)) allocate(newberg%rot)
     endif
     newberg%ang_vel=0.; newberg%ang_accel=0.; newberg%rot=0.
+  endif
+
+  if (bergs%tabular_calving) then !(obviously this is true)
+    if (.not. allocated(newberg%mask_status)) allocate(newberg%mask_status)
+    newberg%mask_status=grd%msk(i,j)
   endif
 
   call add_new_berg_to_list(bergs%list(i,j)%first, newberg)

@@ -1924,6 +1924,7 @@ subroutine accel(bergs, berg, i, j, xi, yj, lat, uvel, vvel, uvel0, vvel0, dt, r
   ! !end if
 
   if (bergs%old_interp_flds_order) then
+    if (bergs%tabular_calving) berg%mask_status=grd%msk(i,j)
     call interp_flds(grd, berg%lon, berg%lat, i, j, xi, yj, rx, ry, uo, vo, ui, vi, ua, va, ssh_x, &
       ssh_y, sst, sss, cn, hi, od)
   else
@@ -2784,11 +2785,12 @@ subroutine thermodynamics(bergs)
         this=>next
       else
 
-      if (bergs%old_interp_flds_order .or. (.not. mts .and. .not. dem .and. this%halo_berg.ge.0.5)) then
-        call interp_flds(grd, this%lon, this%lat, this%ine, this%jne, this%xi, this%yj, 0., 0., &
-          this%uo, this%vo, this%ui, this%vi, this%ua, this%va, this%ssh_x, &
-          this%ssh_y, this%sst, this%sss,this%cn, this%hi)
-      end if
+        if (bergs%old_interp_flds_order .or. (.not. mts .and. .not. dem .and. this%halo_berg.ge.0.5)) then
+          if (bergs%tabular_calving) this%mask_status=grd%msk(grdi,grdj)
+          call interp_flds(grd, this%lon, this%lat, this%ine, this%jne, this%xi, this%yj, 0., 0., &
+            this%uo, this%vo, this%ui, this%vi, this%ua, this%va, this%ssh_x, &
+            this%ssh_y, this%sst, this%sss,this%cn, this%hi)
+        end if
 
       SST=this%sst
       SSS=this%sss
@@ -4019,51 +4021,6 @@ subroutine spread_mass_across_ocean_cells(bergs, berg, i, j, x, y, Mberg, Mbits,
 
 end subroutine spread_mass_across_ocean_cells
 
-!!$!> Distribute a quantity among nine cells on a grid centered at cell i,j
-!!$subroutine spread_variable_across_cells(grd, variable_on_ocean, Var, i, j, &
-!!$           yDxL, yDxC,yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR, I_fraction_used)
-!!$  ! Arguments
-!!$  type(icebergs_gridded), pointer, intent(in) :: grd !< Container for gridded fields
-!!$  real, dimension(grd%isd:grd%ied, grd%jsd:grd%jed, 9), intent(inout) :: variable_on_ocean !< Gridded field to augment
-!!$  real, intent(in) :: Var !< Variable to be spread accross cell
-!!$  real, intent(in) :: yDxL !< Weight for the cell at i-1,j-1
-!!$  real, intent(in) :: yDxC !< Weight for the cell at i-1,j
-!!$  real, intent(in) :: yDxR !< Weight for the cell at i-1,j+1
-!!$  real, intent(in) :: yCxL !< Weight for the cell at i,j-1
-!!$  real, intent(in) :: yCxC !< Weight for the cell at i,j
-!!$  real, intent(in) :: yCxR !< Weight for the cell at i,j-1
-!!$  real, intent(in) :: yUxL !< Weight for the cell at i+1,j-1
-!!$  real, intent(in) :: yUxC !< Weight for the cell at i+1,j
-!!$  real, intent(in) :: yUxR !< Weight for the cell at i+1,j+1
-!!$  real, intent(in) :: I_fraction_used !< Amount of iceberg used (inverse)
-!!$  integer, intent(in) :: i !< i-index of cell containing center of berg
-!!$  integer, intent(in) :: j !< j-index of cell containing center of berg
-!!$
-!!$  !Spreading the iceberg mass onto the ocean
-!!$  variable_on_ocean(i,j,1)=variable_on_ocean(i,j,1)+(yDxL*Var*I_fraction_used)
-!!$  variable_on_ocean(i,j,2)=variable_on_ocean(i,j,2)+(yDxC*Var*I_fraction_used)
-!!$  variable_on_ocean(i,j,3)=variable_on_ocean(i,j,3)+(yDxR*Var*I_fraction_used)
-!!$  variable_on_ocean(i,j,4)=variable_on_ocean(i,j,4)+(yCxL*Var*I_fraction_used)
-!!$  variable_on_ocean(i,j,5)=variable_on_ocean(i,j,5)+(yCxC*Var*I_fraction_used)
-!!$  variable_on_ocean(i,j,6)=variable_on_ocean(i,j,6)+(yCxR*Var*I_fraction_used)
-!!$  variable_on_ocean(i,j,7)=variable_on_ocean(i,j,7)+(yUxL*Var*I_fraction_used)
-!!$  variable_on_ocean(i,j,8)=variable_on_ocean(i,j,8)+(yUxC*Var*I_fraction_used)
-!!$  variable_on_ocean(i,j,9)=variable_on_ocean(i,j,9)+(yUxR*Var*I_fraction_used)
-!!$
-!!$end subroutine spread_variable_across_cells
-
-!!$!> Returns area of a triangle
-!!$real function Area_of_triangle(Ax, Ay, Bx, By, Cx, Cy)
-!!$  ! Arguments
-!!$  real, intent(in) :: Ax !< x-position of corner A
-!!$  real, intent(in) :: Ay !< y-position of corner A
-!!$  real, intent(in) :: Bx !< x-position of corner B
-!!$  real, intent(in) :: By !< y-position of corner B
-!!$  real, intent(in) :: Cx !< x-position of corner C
-!!$  real, intent(in) :: Cy !< y-position of corner C
-!!$  Area_of_triangle    =   abs(    0.5*((Ax*(By-Cy))+(Bx*(Cy-Ay))+(Cx*(Ay-By))) )
-!!$end function Area_of_triangle
-
 !> Returns x rounded of to sig_fig
 !! \todo What the heck is this for? -AJA
 real function roundoff(x,sig_fig)
@@ -4111,6 +4068,7 @@ subroutine interp_gridded_fields_to_bergs(bergs)
           call getRandomNumbers(rns, ry)
           ry = 2.*ry - 1.
         endif
+        if (bergs%tabular_calving) grd%msk(grdi,grdj)=1 !berg%mask_status=grd%msk(grdi,grdj)
         call interp_flds(grd, berg%lon, berg%lat, berg%ine, berg%jne, berg%xi, berg%yj, rx, ry, berg%uo, berg%vo, &
           berg%ui, berg%vi, berg%ua, berg%va, berg%ssh_x, berg%ssh_y, berg%sst, berg%sss, berg%cn, berg%hi, berg%od)
       endif
@@ -4510,6 +4468,7 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   real, dimension(:,:), optional, pointer :: frac_cberg_calved !< Cell fraction of fully-calved bonded bergs from
                                                                             !! the ice sheet [nondim]
   ! Local variables
+  type(iceberg), pointer :: berg
   type(tabular_calving_state), pointer :: TC
   integer :: iyr, imon, iday, ihr, imin, isec, k
   type(icebergs_gridded), pointer :: grd
@@ -4619,12 +4578,28 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
         else
           grd%msk(i,j)=1
         endif
+
+!!$ A TEMPORARY WORK-AROUND?
+!!$ Adjust mask so that bergs are never in a  masked cell
+        if (grd%msk(i,j).ne.1) then
+          if (associated(bergs%list(i,j)%first)) then
+            berg=>bergs%list(i,j)%first
+            do while (associated(berg))
+              if (berg%static_berg==0.) then
+                grd%msk(i,j)=1
+                berg=>NULL()
+              else
+                berg=>berg%next
+              endif
+            enddo
+          endif
+        endif
       enddo; enddo
 
-      call mpp_update_domains(TC%calve_mask, grd%domain)!, complete=.false.)
-      call mpp_update_domains(TC%h_shelf, grd%domain)!, complete=.false.)
-      call mpp_update_domains(TC%frac_shelf, grd%domain)!, complete=.false.)
-      call mpp_update_domains(grd%msk, grd%domain)!, complete=.true.)
+      call mpp_update_domains(TC%calve_mask, grd%domain, complete=.false.)
+      call mpp_update_domains(TC%h_shelf, grd%domain, complete=.false.)
+      call mpp_update_domains(TC%frac_shelf, grd%domain, complete=.false.)
+      call mpp_update_domains(grd%msk, grd%domain, complete=.true.)
 
       TC%frac_cberg_calved(:,:) = 0.0
       TC%frac_cberg(:,:) = 0.0
@@ -5783,6 +5758,11 @@ subroutine calve_icebergs(bergs)
             newberg%ang_vel=0.; newberg%ang_accel=0.; newberg%rot=0.
           endif
 
+          if (bergs%tabular_calving) then
+            if (.not. allocated(newberg%mask_status)) allocate(newberg%mask_status)
+            newberg%mask_status=grd%msk(i,j)
+          endif
+
           if (.not. bergs%old_interp_flds_order) then
             !interpolate gridded variables to new iceberg
             if (grd%tidal_drift>0.) then
@@ -5991,6 +5971,11 @@ subroutine calve_fl_icebergs(bergs,pberg,k,l_b,fl_disp_x,fl_disp_y,berg_from_bit
   if (bergs%dem) then
     allocate(cberg%ang_vel,cberg%ang_accel,cberg%rot)
     cberg%ang_vel=0.; cberg%ang_accel=0.; cberg%rot=0.
+  endif
+
+  if (bergs%tabular_calving) then
+    allocate(cberg%mask_status)
+    cberg%mask_status=grd%msk(cberg%ine,cberg%jne)
   endif
 
   call add_new_berg_to_list(bergs%list(cberg%ine,cberg%jne)%first, cberg)
@@ -6492,11 +6477,7 @@ subroutine evolve_icebergs_mts(bergs)
         i=berg%ine     ; j=berg%jne
         xi=berg%xi     ; yj=berg%yj
         ! finalize new iceberg positions and index
-        call adjust_index_and_ground(grd, lonn, latn, uveln, vveln, i, j, xi, yj, bounced, error_flag, berg%id)
-!!$        if (xi .ne. xi) then
-!!$          print *,'id',berg%id,'EIM xi0',berg%xi,'xi1',xi,'u,v',uveln,vveln,'lonlat',berg%lon,berg%lat,&
-!!$            'msk0',grd%msk(berg%ine,berg%jne),'msk1',grd%msk(i,j),'i,j 0',berg%ine,berg%jne,'i,j 1',i,j,'lonn,latn',lonn,latn
-!!$        endif
+        call adjust_index_and_ground(grd, lonn, latn, uveln, vveln, i, j, xi, yj, bounced, error_flag, berg%id, ignore_bounce=.true.)
         berg%lon=lonn      ;  berg%lat=latn
         berg%lon_old=lonn  ;  berg%lat_old=latn
         berg%ine=i    ;  berg%jne=j
@@ -7175,7 +7156,8 @@ subroutine update_verlet_position(bergs, berg)
   ! Adjusting mass...
   !MP3
   i=berg%ine;  j=berg%jne;  xi = berg%xi;  yj = berg%yj
-  call adjust_index_and_ground(grd, lonn, latn, uvel3, vvel3, i, j, xi, yj, bounced, error_flag, berg%id)  !Alon:"unclear which velocity to use here?"
+  call adjust_index_and_ground(grd, lonn, latn, uvel3, vvel3, i, j, xi, yj, bounced, error_flag, berg%id, &
+                               ignore_bounce=bergs%tabular_calving)  !Alon:"unclear which velocity to use here?"
 
   !if (bounced) then
   !  print *, 'you have been bounce: big time!',mpp_pe(),berg%id,lonn, latn, uvel3, vvel3, i, j, xi, yj, bounced, error_flag
@@ -7244,7 +7226,7 @@ subroutine rotvec_from_tang(lon, xdot, ydot, uvel, vvel)
 end subroutine rotvec_from_tang
 
 !> Moves berg's cell indexes,(i,j), checking for collisional with coasts
-subroutine adjust_index_and_ground(grd, lon, lat, uvel, vvel, i, j, xi, yj, bounced, error, id)
+subroutine adjust_index_and_ground(grd, lon, lat, uvel, vvel, i, j, xi, yj, bounced, error, id, ignore_bounce)
   ! Arguments
   type(icebergs_gridded), pointer :: grd !< Container for gridded fields
   real, intent(inout) :: lon !< Longitude (degree E)
@@ -7257,6 +7239,7 @@ subroutine adjust_index_and_ground(grd, lon, lat, uvel, vvel, i, j, xi, yj, boun
   integer, intent(inout) :: j !< j-index of cell
   logical, intent(out) :: bounced !< True if berg collided with coast
   logical, intent(out) :: error !< True if adjustments could not be made consistently
+  logical, intent(in), optional :: ignore_bounce !< Ignore bouncing if true
   integer(kind=8), intent(in) :: id !< Berg identifier
   ! Local variables
   logical lret, lpos
@@ -7265,6 +7248,10 @@ subroutine adjust_index_and_ground(grd, lon, lat, uvel, vvel, i, j, xi, yj, boun
   real :: xi0, yj0, lon0, lat0
   integer :: stderrunit
   logical :: point_in_cell_using_xi_yj
+  logical :: no_bounce
+
+  no_bounce=.false.
+  if (present(ignore_bounce)) no_bounce=ignore_bounce
 
   ! Get the stderr unit number
   stderrunit = stderr()
@@ -7370,7 +7357,7 @@ subroutine adjust_index_and_ground(grd, lon, lat, uvel, vvel, i, j, xi, yj, boun
     icount=icount+1
     if (xi.lt.0.) then
       if (i>grd%isd) then
-        if (grd%msk(i-1,j)>0.) then
+        if (no_bounce .or. grd%msk(i-1,j)>0.) then
           if (i>grd%isd+1) i=i-1
         else
          !write(stderr(),'(a,6f8.3,i)') 'KID, adjust: bouncing berg from west',lon,lat,xi,yj,uvel,vvel,mpp_pe()
@@ -7380,7 +7367,7 @@ subroutine adjust_index_and_ground(grd, lon, lat, uvel, vvel, i, j, xi, yj, boun
     elseif (xi.ge.1.) then    !Alon!!!!
 !    elseif (xi.gt.1.) then
       if (i<grd%ied) then
-        if (grd%msk(i+1,j)>0.) then
+        if (no_bounce .or. grd%msk(i+1,j)>0.) then
           if (i<grd%ied) i=i+1
         else
          !write(stderr(),'(a,6f8.3,i)') 'KID, adjust: bouncing berg from east',lon,lat,xi,yj,uvel,vvel,mpp_pe()
@@ -7390,7 +7377,7 @@ subroutine adjust_index_and_ground(grd, lon, lat, uvel, vvel, i, j, xi, yj, boun
     endif
     if (yj.lt.0.) then
       if (j>grd%jsd) then
-        if (grd%msk(i,j-1)>0.) then
+        if (no_bounce .or. grd%msk(i,j-1)>0.) then
           if (j>grd%jsd+1) j=j-1
         else
          !write(stderr(),'(a,6f8.3,i)') 'KID, adjust: bouncing berg from south',lon,lat,xi,yj,uvel,vvel,mpp_pe()
@@ -7400,7 +7387,7 @@ subroutine adjust_index_and_ground(grd, lon, lat, uvel, vvel, i, j, xi, yj, boun
     elseif (yj.ge.1.) then     !Alon.
 !    elseif (yj.gt.1.) then
       if (j<grd%jed) then
-        if (grd%msk(i,j+1)>0.) then
+        if (no_bounce .or. grd%msk(i,j+1)>0.) then
           if (j<grd%jed) j=j+1
         else
          !write(stderr(),'(a,6f8.3,i)') 'KID, adjust: bouncing berg from north',lon,lat,xi,yj,uvel,vvel,mpp_pe()
@@ -7432,8 +7419,9 @@ subroutine adjust_index_and_ground(grd, lon, lat, uvel, vvel, i, j, xi, yj, boun
  !    stop 'KID, adjust: Moved too far in j!'
  !  endif
  !endif
+  if (bounced .and. no_bounce) call error_mesg('KID, adjust: ', 'Bounced despite turning bouncing off!', FATAL)
 
-  if (.not.bounced.and.lret.and.grd%msk(i,j)>0.) return ! Landed in ocean without bouncing so all is well
+  if (.not.bounced.and.lret.and.(grd%msk(i,j)>0..or.no_bounce)) return ! Landed in ocean without bouncing so all is well
 
   if (.not.bounced.and..not.lret) then ! This implies the berg traveled many cells without getting far enough
     if (debug) then

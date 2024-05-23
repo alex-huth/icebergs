@@ -50,6 +50,7 @@ logical :: save_bond_traj=.false. !<Save trajectory files for bonds
 logical :: ewsame=.false. !<(F) set T if periodic and 2 PEs along the x direction (zonal) (i.e. E/W PEs are the same)
 logical :: iceberg_bonds_on=.False. ! True=Allow icebergs to have bonds, False=don't allow.
 logical :: dem=.false. !< If T, run in DEM-mode with angular terms, variable stiffness, etc
+logical :: tabular_calving_global=.false. !< True to allow tabular calving of icebergs from ice shelves
 logical :: save_bond_forces=.true. !< Saves forces on bonds so only 1 of 2 bonds in a pair need processing during DEM-MTS explicit sub-steps
 logical :: short_step_mts_grounding=.false.
 logical :: radius_based_drag=.false. !if T, hex bergs, and dem, 2r is used as the area of the vert face for drag/wave forces
@@ -69,7 +70,7 @@ public verbose, really_debug, debug, restart_input_dir,make_calving_reproduce,ol
 public ignore_ij_restart, use_slow_find,generate_test_icebergs,old_bug_rotated_weights,budget
 public orig_read, force_all_pes_traj
 public mts,save_bond_traj,ewsame,iceberg_bonds_on
-public dem, save_bond_forces, orig_dem_moment_of_inertia
+public dem, save_bond_forces, orig_dem_moment_of_inertia, tabular_calving_global
 public short_step_mts_grounding, radius_based_drag
 public A68_test, A68_xdisp, A68_ydisp
 public footloose
@@ -298,6 +299,8 @@ type :: xyt
   real, allocatable :: ang_vel !< Angular velocity
   real, allocatable :: ang_accel !< Angular acceleration
   real, allocatable :: rot !< Accumulated rotation
+  ! For tabular calving from ice shelves
+  real, allocatable :: mask_status
 end type xyt
 
 !> An iceberg object, used as a link in a linked list
@@ -372,6 +375,8 @@ type :: iceberg
   real, allocatable :: ang_vel !< Angular velocity
   real, allocatable :: ang_accel !< Angular acceleration
   real, allocatable :: rot !< Accumulated rotation
+  ! For tabular calving from ice shelves
+  real, allocatable :: mask_status
 end type iceberg
 
 !> A bond object connecting two bergs, used as a link in a linked list
@@ -638,7 +643,7 @@ type :: icebergs !; private !Niki: Ask Alistair why this is private. ice_bergs_i
   logical :: snap_tabular_calving_to_bonded_grid=.true. !align tabular particles that calve from ice shelves with a constant cartesian grid
   !backwards compatibility
   logical :: old_interp_flds_order=.false. !< Use old order of when to interpolate grid variables to bergs. Will be false if MTS, DEM, or footloose
-  logical :: tabular_calving=.false.
+  logical :: tabular_calving=.false. !< True to allow tabular calving of icebergs from ice shelves
   real :: shelf_to_tabular_hours !< Time (hours) over which ice shelf is transitioned to bonded-particle tabular icebergs
 end type icebergs
 
@@ -864,6 +869,7 @@ logical :: constant_interaction_LW=.false. ! Always use the initial, globally co
 real :: constant_length=0. ! If constant_interaction_LW, the constant length used. If zero in the nml, will be set to max initial L
 real :: constant_width=0. ! If constant_interaction_LW, the constant width used. If zero in the nml, will be set to max initial W
 real :: ocean_drag_scale=1. !< Scaling factor for the ocean drag coefficients
+logical :: calculate_spring_from_dem_spring !< If constant_interaction_LW, will calculate spring_coef that corresponds to dem_spring_coef
 ! Footloose calving parameters
 !logical :: footloose=.false. !< Turn footloose calving on/off
 logical :: fl_init_child_xy_by_pe=.false. !< True: position of a new footloose child berg along the parent perimeter is random, yet constant for each PE (old bug). False: fully-random.
@@ -907,7 +913,7 @@ namelist /icebergs_nml/ verbose, budget, halo,  traj_sample_hrs, initial_mass, t
          fl_youngs, fl_strength,  save_all_traj_year, save_nonfl_traj_by_class,&
          save_traj_by_class_start_mass_thres_n, save_traj_by_class_start_mass_thres_s,traj_area_thres_sntbc,&
          traj_area_thres_fl,tau_is_velocity, ocean_drag_scale, A68_test, &
-         A68_xdisp,A68_ydisp,use_broken_bonds_for_substep_contact,print_fracture,&
+         A68_xdisp,A68_ydisp,use_broken_bonds_for_substep_contact,print_fracture,calculate_spring_from_dem_spring,&
          orig_dem_moment_of_inertia, break_bonds_on_sub_steps, skip_first_outer_mts_step, rev_mind, &
          no_frac_first_ts, use_grounding_torque, short_step_mts_grounding, radius_based_drag, save_bond_forces, shelf_to_tabular_hours
 
@@ -1520,6 +1526,9 @@ endif
         bergs%constant_radius=sqrt(bergs%constant_area/pi) ! Interaction radius of the iceberg (assuming circular icebergs)
       endif
     endif
+    if (calculate_spring_from_dem_spring .and. bergs%dem .and. bergs%constant_radius.ne.0) then
+      bergs%spring_coef = bergs%dem_spring_coef/(bergs%rho_bergs * 4.*(bergs%constant_radius**2))
+    endif
   endif
   bergs%constant_radius_IS_berg=constant_radius_IS_berg
   bergs%snap_tabular_calving_to_bonded_grid=snap_tabular_calving_to_bonded_grid
@@ -1584,6 +1593,11 @@ endif
     bergs%tabular_calving=tabular_calving
   else
     bergs%tabular_calving=.false.
+  endif
+  if (bergs%tabular_calving) then
+    buffer_width=buffer_width+1
+    buffer_width_traj=buffer_width_traj+1
+    tabular_calving_global=.true.
   endif
   !necessary?
   if (.not. mts) then
@@ -3788,6 +3802,10 @@ type(bond), pointer :: current_bond
     call push_buffer_value(buff%data(:,n), counter, berg%rot)
   endif
 
+  if (tabular_calving_global) then
+    call push_buffer_value(buff%data(:,n), counter, berg%mask_status)
+  endif
+
   if (max_bonds .gt. 0) then
     current_bond=>berg%first_bond
     do k = 1,max_bonds
@@ -3960,6 +3978,8 @@ real :: temp_lon,temp_lat,length
 
   if (dem) allocate(localberg%ang_vel,localberg%ang_accel,localberg%rot)
 
+  if (tabular_calving_global) allocate(localberg%mask_status)
+
   counter = 0
   call pull_buffer_value(buff%data(:,n), counter, localberg%lon)
   call pull_buffer_value(buff%data(:,n), counter, localberg%lat)
@@ -4025,6 +4045,10 @@ real :: temp_lon,temp_lat,length
     call pull_buffer_value(buff%data(:,n), counter, localberg%ang_vel)
     call pull_buffer_value(buff%data(:,n), counter, localberg%ang_accel)
     call pull_buffer_value(buff%data(:,n), counter, localberg%rot)
+  endif
+
+  if (tabular_calving_global) then
+    call pull_buffer_value(buff%data(:,n), counter, localberg%mask_status)
   endif
 
   !These quantities no longer need to be passed between processors
@@ -4285,6 +4309,10 @@ subroutine pack_traj_into_buffer2(traj, buff, n, save_short_traj, save_fl_traj)
       call push_buffer_value(buff%data(:,n), counter, traj%ang_accel)
       call push_buffer_value(buff%data(:,n), counter, traj%rot)
     endif
+
+    if (tabular_calving_global) then
+      call push_buffer_value(buff%data(:,n), counter, traj%mask_status)
+    endif
   endif
 
 end subroutine pack_traj_into_buffer2
@@ -4311,6 +4339,8 @@ subroutine unpack_traj_from_buffer2(first, buff, n, save_short_traj, save_fl_tra
   endif
 
   if (dem) allocate(traj%ang_vel,traj%ang_accel,traj%rot)
+
+  if (tabular_calving_global) allocate(traj%mask_status)
 
   counter = 0
   call pull_buffer_value(buff%data(:,n),counter,traj%lon)
@@ -4377,6 +4407,10 @@ subroutine unpack_traj_from_buffer2(first, buff, n, save_short_traj, save_fl_tra
       call pull_buffer_value(buff%data(:,n), counter, traj%ang_vel)
       call pull_buffer_value(buff%data(:,n), counter, traj%ang_accel)
       call pull_buffer_value(buff%data(:,n), counter, traj%rot)
+    endif
+
+    if (tabular_calving_global) then
+      call pull_buffer_value(buff%data(:,n), counter, traj%mask_status)
     endif
   endif
   call append_posn(first, traj)
@@ -4965,6 +4999,8 @@ integer :: stderrunit
   endif
 
   if (dem) allocate(berg%ang_vel,berg%ang_accel,berg%rot)
+
+  if (tabular_calving_global) allocate(berg%mask_status)
 
   berg=bergvals
   berg%prev=>null()
@@ -5945,6 +5981,8 @@ endif
 
   if (dem) allocate(posn%ang_vel,posn%ang_accel,posn%rot)
 
+  if (tabular_calving_global) allocate(posn%mask_status)
+
   if (save_bond_traj .and. dem) allocate(bond_posn%tangd1,bond_posn%tangd2,bond_posn%nstress,&
                                          bond_posn%sstress,bond_posn%rel_rotation,bond_posn%broken)
 
@@ -6036,6 +6074,10 @@ endif
             posn%ang_accel=this%ang_accel
             posn%rot=this%rot
           endif
+
+          if (tabular_calving_global) then
+            posn%mask_status=this%mask_status
+          endif
         endif
 
         call push_posn(this%trajectory, posn)
@@ -6104,6 +6146,8 @@ type(xyt), pointer :: new_posn
 
   if (dem) allocate(new_posn%ang_vel,new_posn%ang_accel,new_posn%rot)
 
+  if (tabular_calving_global) allocate(new_posn%mask_status)
+
   new_posn=posn_vals
   new_posn%next=>trajectory
   trajectory=>new_posn
@@ -6149,6 +6193,8 @@ type(xyt), pointer :: new_posn,next,last
   endif
 
   if (dem) allocate(new_posn%ang_vel,new_posn%ang_accel,new_posn%rot)
+
+  if (tabular_calving_global) allocate(new_posn%mask_status)
 
   new_posn=posn_vals
   new_posn%next=>null()

@@ -655,6 +655,7 @@ type :: icebergs !; private !Niki: Ask Alistair why this is private. ice_bergs_i
   logical :: old_interp_flds_order=.false. !< Use old order of when to interpolate grid variables to bergs. Will be false if MTS, DEM, or footloose
   logical :: tabular_calving=.false. !< True to allow tabular calving of icebergs from ice shelves
   real :: shelf_to_tabular_hours !< Time (hours) over which ice shelf is transitioned to bonded-particle tabular icebergs
+  logical :: remove_tabular_outer_bonds_when_calve=.false. !< Removes edge particles from a calving iceberg conglomerate so that it can more easily flow away from the ice shelf
 end type icebergs
 
 !> Structure that describes the ice shelf tabualr calving state
@@ -896,6 +897,7 @@ real :: new_berg_from_fl_bits_mass_thres=1.e12 ! Create a new berg from FL bits 
 real :: constant_radius_IS_berg=0. !< particle radius for iKID particles that calve from ice shelves
 logical :: snap_tabular_calving_to_bonded_grid=.true. !align tabular particles that calve from ice shelves with a constant cartesian grid
 real :: shelf_to_tabular_hours=0. !< Time (hours) over which ice shelf is transitioned to bonded-particle tabular icebergs
+logical :: remove_tabular_outer_bonds_when_calve=.false. ! Removes edge particles from a calving iceberg conglomerate so that it can more easily flow away from the ice shelf
 
 namelist /icebergs_nml/ verbose, budget, halo,  traj_sample_hrs, initial_mass, traj_write_hrs, max_bonds, save_short_traj,traj_name,bond_traj_name,&
          traj_area_thres, Static_icebergs,distribution, mass_scaling, initial_thickness, verbose_hrs, spring_coef,bond_coef,&
@@ -928,7 +930,8 @@ namelist /icebergs_nml/ verbose, budget, halo,  traj_sample_hrs, initial_mass, t
          traj_area_thres_fl,tau_is_velocity, ocean_drag_scale, A68_test, &
          A68_xdisp,A68_ydisp,use_broken_bonds_for_substep_contact,print_fracture,calculate_spring_from_dem_spring,&
          orig_dem_moment_of_inertia, break_bonds_on_sub_steps, skip_first_outer_mts_step, rev_mind, &
-         no_frac_first_ts, use_grounding_torque, short_step_mts_grounding, radius_based_drag, save_bond_forces, shelf_to_tabular_hours
+         no_frac_first_ts, use_grounding_torque, short_step_mts_grounding, radius_based_drag, save_bond_forces, &
+         shelf_to_tabular_hours, remove_tabular_outer_bonds_when_calve
 
 ! Local variables
 integer :: ierr, iunit, i, j, id_class, axes3d(3), axes3d_b(3), is,ie,js,je,np
@@ -1554,6 +1557,7 @@ endif
   bergs%constant_radius_IS_berg=constant_radius_IS_berg
   bergs%snap_tabular_calving_to_bonded_grid=snap_tabular_calving_to_bonded_grid
   bergs%shelf_to_tabular_hours=shelf_to_tabular_hours
+  bergs%remove_tabular_outer_bonds_when_calve=remove_tabular_outer_bonds_when_calve
   bergs%ocean_drag_scale=ocean_drag_scale
   ! Footloose calving parameters
   bergs%footloose=footloose

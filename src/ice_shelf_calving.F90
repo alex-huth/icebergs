@@ -1108,6 +1108,10 @@ subroutine new_tabular_bergs_thickness_and_pressure(bergs)
               !The section of the ice shelf from where the particle calved will be eliminated
               bcount_r=bcount_r+1
               berg%static_berg=0.
+              !Removes edge particles from a calving iceberg conglomerate so that it can more easily flow away from the ice shelf
+              if (bergs%remove_tabular_outer_bonds_when_calve .and. berg%n_bonds<bergs%max_bonds) &
+                berg%static_berg=10 !call delete_all_bonds(berg)
+
               call spread_variable_across_cells(grd, grd%frac_cberg_calved, berg%length * berg%width * berg%mass_scaling, &
                                                 grdi, grdj, yDxL, yDxC,yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR, 1.0)
               berg=>berg%next
@@ -1141,6 +1145,18 @@ subroutine new_tabular_bergs_thickness_and_pressure(bergs)
 
   !Adjust frac_cberg_calved and the iceberg mask
   do grdj = grd%jsc,grd%jec ; do grdi = grd%isc,grd%iec
+
+    if (bergs%remove_tabular_outer_bonds_when_calve) then
+      berg=>bergs%list(grdi,grdj)%first
+      do while (associated(berg))
+        if (berg%static_berg==10) then
+          berg%static_berg=0
+          call delete_all_bonds(berg)
+        else
+          berg=>berg%next
+        endif
+      enddo
+    endif
     !In the ice shelf code, cells with frac_cberg_calved == frac_shelf will cause all ice shelf in the cell to be eliminated.
     !Alternatively, all ice shelf in the cell will also be eliminated if frac_cberg_calved == 1.
     !Here, account for potential round-off error so that frac_cberg_calved definitely equals frac_shelf (or 1) where needed -- this should

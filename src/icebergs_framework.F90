@@ -605,9 +605,16 @@ type :: icebergs !; private !Niki: Ask Alistair why this is private. ice_bergs_i
   integer :: nbonds=0
   integer, dimension(:), pointer :: nbergs_calved_by_class_s=>null()
   integer, dimension(:), pointer :: nbergs_calved_by_class_n=>null()
+  ! Thermodynamics (3 equation melting)
+  real :: VK=0.4  ! Von Karman's constant (nondim)
+  real :: ZETA_N=0.052 ! The fraction of the boundary layer over which the viscosity is linearly
+                       ! increasing. (was 1/8. Why?). (nondim)
+  real :: RC=0.2 ! critical flux Richardson number (nondim)
+  real :: buoy_flux_itt_threshold=1.e-4 ! Convergence criterion of Newton's method for buoyancy iteration (nondim)
   ! mts parameters - added by Alex
   logical :: mts=.false. !< Use multiple timestepping scheme (substep size is automatically determined)
   integer :: mts_sub_steps
+  logical :: sts_dem=.false. !< Use single timestepping with DEM
   real :: mts_fast_dt
   integer :: mts_part !for turning on/off berg interactions/collisions during different mts scheme
   logical :: remove_unused_bergs=.true. !remove unneeded bergs after PEs transfers
@@ -849,6 +856,7 @@ logical :: read_ocean_depth_from_file=.false. ! If true, ocean depth is read fro
 integer :: nbasins=1 !< Number of ice-sheet basins of origin for the bergs
 real, dimension(:), allocatable :: basin_arr !< array of basin IDs (/ I, I = 1, nbasins) /)
 integer :: mts_sub_steps=-1 ! If -1, the number of mts sub-steps will be automatically determined
+logical :: sts_dem=.false. !< Use single timestepping with DEM
 logical :: remove_unused_bergs=.true. ! Remove unneeded bergs after PEs transfers
 real :: contact_distance=0.0 ! For unbonded berg interactions, collision is assumed at max(contact_distance,sum of the 2 bergs radii)
 logical :: force_convergence=.false. ! Experimental MTS convergence scheme that better preserves momentum during collisions
@@ -866,6 +874,12 @@ real, dimension(nclasses) :: distribution_n=(/0.14, 0.15, 0.20, 0.15, 0.08, 0.07
 real, dimension(nclasses) :: mass_scaling_n=(/200, 50, 25, 13, 8, 5, 2, 1, 1, 1/) ! for N hemisphere
 real, dimension(nclasses) :: initial_thickness_n=(/80.4, 159.5, 240., 320., 360., 360., 360., 360., 360., 360./) ! for N hemisphere
 integer(kind=8) :: debug_iceberg_with_id = -1 ! If positive, monitors a berg with this id
+! Thermodynamics (3 equation melting)
+real :: VK=0.4  ! Von Karman's constant (nondim)
+real :: ZETA_N=0.052 ! The fraction of the boundary layer over which the viscosity is linearly
+                     ! increasing. (was 1/8. Why?). (nondim)
+real :: RC=0.2 ! critical flux Richardson number (nondim)
+real :: buoy_flux_itt_threshold=1.e-4 ! Convergence criterion of Newton's method for buoyancy iteration (nondim)
 ! DEM-mode parameters
 !logical :: dem=.false. !if T, run in DEM-mode with angular terms, variable stiffness, etc
 character(len=11) :: fracture_criterion='none' !< For DEM-mode. Options are 'stress' or 'none'.
@@ -916,7 +930,7 @@ namelist /icebergs_nml/ verbose, budget, halo,  traj_sample_hrs, initial_mass, t
          const_gamma, Gamma_T_3EQ, ignore_traj, debug_iceberg_with_id,use_updated_rolling_scheme, tip_parameter, &
          read_old_restarts, tau_calving, read_ocean_depth_from_file, melt_cutoff,apply_thickness_cutoff_to_gridded_melt,&
          apply_thickness_cutoff_to_bergs_melt, use_mixed_melting, internal_bergs_for_drag, coastal_drift, tidal_drift,&
-         mts,ewsame,mts_sub_steps,contact_distance,length_for_manually_initialize_bonds,&
+         mts,ewsame,mts_sub_steps,sts_dem,contact_distance,length_for_manually_initialize_bonds,&
          manually_initialize_bonds_from_radii,contact_spring_coef,fracture_criterion, use_berg_origin_basins, nbasins, &
          debug_write,cdrag_grounding,h_to_init_grounding,frac_thres_scaling,frac_thres_n,frac_thres_t,save_bond_traj,&
          remove_unused_bergs,force_convergence,explicit_inner_mts,convergence_tolerance,dem,ignore_tangential_force,poisson,&
@@ -931,7 +945,7 @@ namelist /icebergs_nml/ verbose, budget, halo,  traj_sample_hrs, initial_mass, t
          A68_xdisp,A68_ydisp,use_broken_bonds_for_substep_contact,print_fracture,calculate_spring_from_dem_spring,&
          orig_dem_moment_of_inertia, break_bonds_on_sub_steps, skip_first_outer_mts_step, rev_mind, &
          no_frac_first_ts, use_grounding_torque, short_step_mts_grounding, radius_based_drag, save_bond_forces, &
-         shelf_to_tabular_hours, remove_tabular_outer_bonds_when_calve
+         shelf_to_tabular_hours, remove_tabular_outer_bonds_when_calve, VK, ZETA_N, RC, buoy_flux_itt_threshold
 
 ! Local variables
 integer :: ierr, iunit, i, j, id_class, axes3d(3), axes3d_b(3), is,ie,js,je,np
@@ -1372,6 +1386,10 @@ endif
 if (use_berg_origin_basins) then
   buffer_width=buffer_width+1
   buffer_width_traj=buffer_width_traj+1
+if (sts_dem) then
+  !single time stepping is implemented just like multiple timestepping, but with just with 1 sub-step
+  !mts must be true
+  mts=.true.
 endif
 
 !must use verlet with mts - Alex
@@ -1385,6 +1403,8 @@ if (mts) then
     mts_fast_dt = 0.3/sqrt(spring_coef)        !critical dt for mts scheme w/ safety multiplier of 0.75
     mts_sub_steps = ceiling(dt/mts_fast_dt)    !the number of substeps
   end if
+
+  if (sts_dem) mts_sub_steps=1
 
   mts_fast_dt = dt/mts_sub_steps !adjust mts_fast_dt so that dt is an integer multiple of mts_fast_dt
 
@@ -1510,11 +1530,17 @@ endif
   bergs%mts_fast_dt = mts_fast_dt
   bergs%mts_sub_steps = mts_sub_steps
   bergs%mts_part = 1
+  bergs%sts_dem=sts_dem
   bergs%remove_unused_bergs = remove_unused_bergs
   bergs%contact_distance=contact_distance
   bergs%force_convergence=force_convergence
   bergs%explicit_inner_mts=explicit_inner_mts
   bergs%convergence_tolerance=convergence_tolerance
+  ! Thermodynamics (3 equation melting)
+  bergs%VK=VK
+  bergs%ZETA_N=ZETA_N
+  bergs%RC=RC
+  bergs%buoy_flux_itt_threshold=buoy_flux_itt_threshold
   ! DEM-mode parameters
   bergs%dem=dem
   bergs%use_grounding_torque=use_grounding_torque
@@ -2523,7 +2549,8 @@ end subroutine update_halo_calved_tabular_icebergs
 
 !> For the multiple-timestepping velocity verlet scheme, populates the current PE with the following
 !! bergs from neighboring PEs: halo bergs, bergs that comprise any conglomerate that overlaps both
-!! PEs, and bergs within the contact distance of these halo and conglomerate bergs.
+!! PEs, and bergs within the contact distance of these halo and conglomerate bergs. If single time
+!! step DEM, only need the particles that lie within the current PE domain
 Subroutine transfer_mts_bergs(bergs)
 ! Arguments
 type(icebergs), pointer :: bergs !< Container for all types and memory
@@ -2538,60 +2565,68 @@ integer :: count_d, count_k
   grd=>bergs%grd ! for convenience
   stderrunit = stderr() ! Get the stderr unit number
 
-  ! Step 1: Clear the current halos
-  do grdj = grd%jsd,grd%jsc-1 ;  do grdi = grd%isd,grd%ied
-    call delete_all_bergs_in_list(bergs,grdj,grdi)
-  enddo ; enddo
+  if (bergs%sts_dem) then
+    !SINGLE TIME STEP DEM: only need particles with coordinates within the current PE.
+    call update_halo_icebergs(bergs) !use same parallelization as non-mts
+  else
+    !MTS DEM: need all particles that comprise any conglomerate that overlaps the current PE, even
+    !if the particl e coordinates are out of range of the current PE. Also need any particles within
+    !contact range of the conglomerate.
 
-  do grdj = grd%jec+1,grd%jed ;  do grdi = grd%isd,grd%ied
-    call delete_all_bergs_in_list(bergs,grdj,grdi)
-  enddo ; enddo
+    ! Step 1: Clear the current halos
+    do grdj = grd%jsd,grd%jsc-1 ;  do grdi = grd%isd,grd%ied
+      call delete_all_bergs_in_list(bergs,grdj,grdi)
+    enddo; enddo
 
-  do grdj = grd%jsd,grd%jed ;    do grdi = grd%isd,grd%isc-1
-    call delete_all_bergs_in_list(bergs,grdj,grdi)
-  enddo ; enddo
+    do grdj = grd%jec+1,grd%jed ;  do grdi = grd%isd,grd%ied
+      call delete_all_bergs_in_list(bergs,grdj,grdi)
+    enddo; enddo
 
-  do grdj = grd%jsd,grd%jed ;    do grdi = grd%iec+1,grd%ied
-    call delete_all_bergs_in_list(bergs,grdj,grdi)
-  enddo ; enddo
+    do grdj = grd%jsd,grd%jed ;    do grdi = grd%isd,grd%isc-1
+      call delete_all_bergs_in_list(bergs,grdj,grdi)
+    enddo; enddo
 
-  !Remove contact-only/conglom bergs outside halo. Reset conglom IDs to zero for all other bergs
-  do grdj = grd%jsc,grd%jec ;    do grdi = grd%isc,grd%iec
-    this=>bergs%list(grdi,grdj)%first
-    do while (associated(this))
-      if (this%halo_berg .ne. 0) then
-        kick_the_bucket=>this
-        this=>this%next
-        call delete_iceberg_from_list(bergs%list(grdi,grdj)%first,kick_the_bucket)
-      else
-        this%conglom_id=0
-        this=>this%next
-      end if
+    do grdj = grd%jsd,grd%jed ;    do grdi = grd%iec+1,grd%ied
+      call delete_all_bergs_in_list(bergs,grdj,grdi)
+    enddo; enddo
+
+    !Remove contact-only/conglom bergs outside halo. Reset conglom IDs to zero for all other bergs
+    do grdj = grd%jsc,grd%jec ;    do grdi = grd%isc,grd%iec
+      this=>bergs%list(grdi,grdj)%first
+      do while (associated(this))
+        if (this%halo_berg .ne. 0) then
+          kick_the_bucket=>this
+          this=>this%next
+          call delete_iceberg_from_list(bergs%list(grdi,grdj)%first,kick_the_bucket)
+        else
+          this%conglom_id=0
+          this=>this%next
+        end if
+      enddo
+    enddo;enddo
+
+    !Copy bergs between PEs
+    do i = 1,2 !run twice to account for diagonal transfers and guarantee robust transfers of conglomerates
+      call connect_all_bonds(bergs,ignore_unmatched=.true.)
+      nbergs_to_send_e=0; nbergs_to_send_w=0; nbergs_to_send_n=0; nbergs_to_send_s=0
+
+      call mpp_sync_self()
+
+      call mts_pack_in_dir(bergs,nbergs_to_send_e,"e")
+      call mts_pack_in_dir(bergs,nbergs_to_send_w,"w")
+      call mts_pack_in_dir(bergs,nbergs_to_send_n,"n")
+      call mts_pack_in_dir(bergs,nbergs_to_send_s,"s")
+
+      call mts_send_and_receive(bergs,nbergs_to_send_e,nbergs_to_send_w,nbergs_to_send_n,nbergs_to_send_s)
+
+      call mpp_sync_self()
     enddo
-  enddo;enddo
+  endif !end if sts_dem or mts with number of sub-steps > 1
 
-  !Copy bergs between PEs
-  do i = 1,2 !run twice to account for diagonal transfers and guarantee robust transfers of conglomerates
-    call connect_all_bonds(bergs,ignore_unmatched=.true.)
-    nbergs_to_send_e=0; nbergs_to_send_w=0; nbergs_to_send_n=0; nbergs_to_send_s=0
-
-    call mpp_sync_self()
-
-    call mts_pack_in_dir(bergs,nbergs_to_send_e,"e")
-    call mts_pack_in_dir(bergs,nbergs_to_send_w,"w")
-    call mts_pack_in_dir(bergs,nbergs_to_send_n,"n")
-    call mts_pack_in_dir(bergs,nbergs_to_send_s,"s")
-
-    call mts_send_and_receive(bergs,nbergs_to_send_e,nbergs_to_send_w,nbergs_to_send_n,nbergs_to_send_s)
-
-    call mpp_sync_self()
-  enddo
-
-  if (debug) then
+  if (debug .or. bergs%sts_dem) then
     call connect_all_bonds(bergs,ignore_unmatched=.false.,match_bond_pairs=.true.)
   else
-    call connect_all_bonds(bergs,ignore_unmatched=.true.,match_bond_pairs=.true.)
-    ! call connect_all_bonds(bergs,ignore_unmatched=.false.,match_bond_pairs=.true.)
+    call connect_all_bonds(bergs,ignore_unmatched=.true. ,match_bond_pairs=.true.)
   endif
 
   if (bergs%tabular_calving) then
@@ -2619,7 +2654,7 @@ integer :: count_d, count_k
   endif
 
   call set_conglom_ids(bergs)
-  if (bergs%remove_unused_bergs) call mts_remove_unused_bergs(bergs)
+  if (bergs%remove_unused_bergs .and. (.not. bergs%sts_dem)) call mts_remove_unused_bergs(bergs)
 
   ! For debugging
   if (bergs%halo_debugging) then
@@ -5728,7 +5763,7 @@ bond_matched=.false.
                 current_bond%other_id, current_bond%other_berg_ine, current_bond%other_berg_jne
               call error_mesg('KID, connect_all_bonds', 'A non-halo bond is missing!!!', FATAL)
             else  ! This is not a problem if the partner berg is not yet in the halo
-              if (bergs%mts) then
+              if (bergs%mts .and. (.not. bergs%sts_dem)) then
                 call error_mesg('KID, connect_all_bonds', 'A halo bond is missing!!!', WARNING)
                 print *,'mpp_pe(),berg,target,ine,jne,halo_stat,lon,lat',&
                   mpp_pe(),berg%id,current_bond%other_id,i,j,berg%halo_berg,berg%lon,berg%lat

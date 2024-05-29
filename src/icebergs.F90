@@ -3436,11 +3436,11 @@ subroutine find_basal_melt(bergs, dvo, lat, salt, temp, Use_three_equation_model
 
   real ::  Rhoml   ! Ocean mixed layer density in kg m-3.
   real ::  p_int   ! The pressure at the ice-ocean interface, in Pa.
-
-  real, parameter :: VK    = 0.40     ! Von Karman's constant - dimensionless
-  real :: ZETA_N = 0.052   ! The fraction of the boundary layer over which the
-                           ! viscosity is linearly increasing. (Was 1/8. Why?)
-  real, parameter :: RC    = 0.20     ! critical flux Richardson number.
+  !Note that VK, ZETA_N, and RC are namelist parameters
+  real :: VK  ! Von Karman's constant (default = 0.40) (nondim)
+  real :: ZETA_N ! The fraction of the boundary layer over which the
+                 ! viscosity is linearly increasing. (default=0.052, but was 1/8. Why?). (nondim)
+  real :: RC ! critical flux Richardson number (default=0.20) (nondim)
   real :: I_ZETA_N  ! The inverse of ZETA_N.
   real :: I_LF  ! Inverse of Latent Heat of fusion (J kg-1)
   real :: I_VK      ! The inverse of VK.
@@ -3510,6 +3510,10 @@ subroutine find_basal_melt(bergs, dvo, lat, salt, temp, Use_three_equation_model
   ! This routine finds the melt at the base of the icebergs using the 2 equation
   ! model or 3 equation model. This code is adapted from the ice shelf code. Once
   ! the iceberg model is inside the ocean model, we should use the same code.
+
+  ZETA_N = bergs%ZETA_N
+  VK = bergs%VK
+  RC = bergs%RC
 
   I_ZETA_N = 1.0 / ZETA_N
   I_RhoLF = 1.0/(Rho0*LF)
@@ -3584,7 +3588,7 @@ subroutine find_basal_melt(bergs, dvo, lat, salt, temp, Use_three_equation_model
       if (wB_flux > 0.0) then
         ! The buoyancy flux is stabilizing and will reduce the tubulent
         ! fluxes, and iteration is required.
-        n_star_term = (ZETA_N/RC) * (hBL_neut * VK) / ustar_h**3
+        n_star_term = (ZETA_N * hBL_neut * VK) / (RC * ustar_h**3)
         do it3 = 1,30
           ! n_star <= 1.0 is the ratio of working boundary layer thickness
           ! to the neutral thickness.
@@ -3616,12 +3620,13 @@ subroutine find_basal_melt(bergs, dvo, lat, salt, temp, Use_three_equation_model
           ! Find the root where dwB = 0.0
           DwB = wB_flux_new - wB_flux
           if (abs(wB_flux_new - wB_flux) < &
-            1e-4*(abs(wB_flux_new) + abs(wB_flux))) exit
+            bergs%buoy_flux_itt_threshold*(abs(wB_flux_new) + abs(wB_flux))) exit
 
           dDwB_dwB_in = -dG_dwB * (dB_dS * (dS_ustar * I_Gam_S**2) + &
                                          dB_dT * (dT_ustar * I_Gam_T**2)) - 1.0
           ! This is Newton's method without any bounds. ( ### SHOULD BOUNDS BE NEEDED?)
           wB_flux_new = wB_flux - DwB / dDwB_dwB_in
+          wB_flux = wB_flux_new !Added to be consistent with ice-shelf version
         enddo !it3
       endif
 
@@ -3679,7 +3684,7 @@ subroutine find_basal_melt(bergs, dvo, lat, salt, temp, Use_three_equation_model
       else
         Sbdry = Sbdry_it
       endif
-      Sbdry = Sbdry_it
+      !Sbdry = Sbdry_it !Commented out for consistency with ice-shelf version
     enddo !it1
   endif
 
@@ -6037,7 +6042,7 @@ subroutine evolve_icebergs_mts(bergs)
   real :: axn, ayn, bxn, byn
   real :: xi, yj, rx, ry
   integer :: i, j, k
-  integer :: grdi, grdj
+  integer :: grdi, grdj, is, ie, js, je
   integer :: stderrunit
   logical :: only_interactive_forces
   real :: lon1, lat1, dxdl1, dydl
@@ -6068,6 +6073,14 @@ subroutine evolve_icebergs_mts(bergs)
 
   ! For convenience
   grd=>bergs%grd
+
+  if (bergs%sts_dem) then
+    is=grd%isc; ie=grd%iec
+    js=grd%jsc; je=grd%jec
+  else
+    is=grd%isd; ie=grd%ied
+    js=grd%jsd; je=grd%jed
+  endif
 
   !Checking if everything is ok:
   do grdj = grd%jsc,grd%jec ; do grdi = grd%isc,grd%iec ! just for computational domain
@@ -6118,7 +6131,7 @@ subroutine evolve_icebergs_mts(bergs)
 
       ii=ii+1
 
-      do grdj = grd%jsd,grd%jed ; do grdi = grd%isd,grd%ied
+      do grdj = js,je ; do grdi = is,ie
         berg=>bergs%list(grdi,grdj)%first
         do while (associated(berg)) ! loop over all bergs
           !only evolve non-static bergs that overlap, or are part of a conglom that overlaps, the computational domain:
@@ -6163,7 +6176,7 @@ subroutine evolve_icebergs_mts(bergs)
 
       !update uvel_old and vvel_old for damping interaction with other elements
       if (bergs%force_convergence) then
-        do grdj = grd%jsd,grd%jed ; do grdi = grd%isd,grd%ied
+        do grdj = js,je ; do grdi = is,ie
           berg=>bergs%list(grdi,grdj)%first
           do while (associated(berg)) ! loop over all bergs
             if (berg%static_berg .lt. 0.5) then
@@ -6202,7 +6215,7 @@ subroutine evolve_icebergs_mts(bergs)
     !X_0=X_n (no change)
     !update V_0 on uvel_old and vvel_old
     !update lat and lon with implicit slow force component
-    do grdj = grd%jsd,grd%jed ; do grdi = grd%isd,grd%ied
+    do grdj = js,je ; do grdi = is,ie
       berg=>bergs%list(grdi,grdj)%first
       do while (associated(berg)) ! loop over all bergs
         if (berg%static_berg .lt. 0.5 .and. berg%conglom_id.ne.0) then
@@ -6241,7 +6254,7 @@ subroutine evolve_icebergs_mts(bergs)
 
   do k = 1,bergs%mts_sub_steps ! loop over sub-steps
 
-    do grdj = grd%jsd,grd%jed ; do grdi = grd%isd,grd%ied ! update positions
+    do grdj = js,je ; do grdi = is,ie ! update positions
       berg=>bergs%list(grdi,grdj)%first
       do while (associated(berg)) ! loop over all bergs
         if (berg%static_berg .lt. 0.5 .and. berg%conglom_id.ne.0) then
@@ -6300,7 +6313,7 @@ subroutine evolve_icebergs_mts(bergs)
 
       bergs%bond_break_detected=.false.
       ! update velocities
-      do grdj = grd%jsd,grd%jed ; do grdi = grd%isd,grd%ied
+      do grdj = js,je ; do grdi = is,ie
         berg=>bergs%list(grdi,grdj)%first
         do while (associated(berg)) ! loop over all bergs
           if (berg%static_berg .lt. 0.5 .and. berg%conglom_id.ne.0) then
@@ -6403,7 +6416,7 @@ subroutine evolve_icebergs_mts(bergs)
       if (last_iter) finished=.true.
 
       if (bergs%force_convergence .and. (.not. finished)) then
-        do grdj = grd%jsd,grd%jed ; do grdi = grd%isd,grd%ied
+        do grdj = js,je ; do grdi = is,ie
           berg=>bergs%list(grdi,grdj)%first
           do while (associated(berg)) ! loop over all bergs
             if (berg%static_berg .lt. 0.5 .and. berg%conglom_id.ne.0) then
@@ -6428,7 +6441,7 @@ subroutine evolve_icebergs_mts(bergs)
     enddo
 
     !update 'old' velocities used for interactions
-    do grdj = grd%jsd,grd%jed ; do grdi = grd%isd,grd%ied
+    do grdj = js,je ; do grdi = is,ie
       berg=>bergs%list(grdi,grdj)%first
       do while (associated(berg)) ! loop over all bergs
         if (berg%static_berg .lt. 0.5 .and. berg%conglom_id.ne.0) then

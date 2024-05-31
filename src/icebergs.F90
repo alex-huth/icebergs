@@ -6075,8 +6075,8 @@ subroutine evolve_icebergs_mts(bergs)
   grd=>bergs%grd
 
   if (bergs%sts_dem) then
-    is=grd%isc; ie=grd%iec
-    js=grd%jsc; je=grd%jec
+    is=grd%isc-1; ie=grd%iec+1
+    js=grd%jsc-1; je=grd%jec+1
   else
     is=grd%isd; ie=grd%ied
     js=grd%jsd; je=grd%jed
@@ -6158,9 +6158,12 @@ subroutine evolve_icebergs_mts(bergs)
 
               if (bergs%force_convergence) then
                 berg%uvel_prev=berg%uvel+(dt*ax1); berg%vvel_prev=berg%vvel+(dt*ay1) !the new velocity
-                if (ii==1) usum=usum+berg%uvel_old**2 + berg%vvel_old**2
-                usum1=usum1+berg%uvel_prev**2+berg%vvel_prev**2
-                usum2=usum2+(berg%uvel_prev-berg%uvel_old)**2+(berg%vvel_prev-berg%vvel_old)**2
+                if (berg%halo_berg==0) then
+                  !convergence will be global, so only contribute bergs on the current PE
+                  !if (ii==1) usum=usum+berg%uvel_old**2 + berg%vvel_old**2
+                  usum1=usum1+berg%uvel_prev**2+berg%vvel_prev**2
+                  if (ii>1) usum2=usum2+(berg%uvel_prev-berg%uvel_old)**2+(berg%vvel_prev-berg%vvel_old)**2
+                endif
               else
                 berg%uvel=berg%uvel+(dt*ax1); berg%vvel=berg%vvel+(dt*ay1)
 
@@ -6189,9 +6192,12 @@ subroutine evolve_icebergs_mts(bergs)
       endif
 
       if (bergs%force_convergence .and. (.not. last_iter) .and. had_collision) then
+        ! if (ii==1) call mpp_sum(usum)
+        call mpp_sum(usum1)
         if (ii>1) then
           denom=sqrt(usum)+sqrt(usum1)
           if (denom>0) then
+            call mpp_sum(usum2)
             normchange=2.0*sqrt(usum2)/denom
           else
             normchange=0.0
@@ -6384,7 +6390,7 @@ subroutine evolve_icebergs_mts(bergs)
             endif
 
             if (bergs%force_convergence .and. (.not. bergs%explicit_inner_mts)) then
-              if (jj==1) usum=usum+berg%uvel_old**2 + berg%vvel_old**2
+              !if (jj==1) usum=usum+berg%uvel_old**2 + berg%vvel_old**2
               usum1=usum1 + uveln**2 + vveln**2
               usum2=usum2+(uveln-berg%uvel_old)**2+(vveln-berg%vvel_old)**2
             endif
@@ -6399,9 +6405,12 @@ subroutine evolve_icebergs_mts(bergs)
       enddo; enddo ! update velocities
 
       if (bergs%force_convergence .and. .not. last_iter) then
+        !if (jj==1) call mpp_sum(usum)
+        call mpp_sum(usum1)
         if (jj>1) then
           denom=sqrt(usum)+sqrt(usum1)
           if (denom>0) then
+            call mpp_sum(usum2)
             normchange=2.0*sqrt(usum2)/denom
           else
             normchange=0.0

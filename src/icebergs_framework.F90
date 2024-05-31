@@ -5811,7 +5811,9 @@ bond_matched=.false.
                   endif
                 enddo
               else
-                call error_mesg('KID, connect_all_bonds', 'A bond is missing its second berg !!!', WARNING)
+                if (.not. bergs%sts_dem) then
+                  call error_mesg('KID, connect_all_bonds', 'A bond is missing its second berg !!!', WARNING)
+                endif
               endif
             endif
             current_bond=>current_bond%next_bond

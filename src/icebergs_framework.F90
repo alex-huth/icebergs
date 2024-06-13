@@ -139,6 +139,10 @@ type :: icebergs_gridded
   integer :: pe_S !< MPI PE index of PE to the south
   integer :: pe_E !< MPI PE index of PE to the east
   integer :: pe_W !< MPI PE index of PE to the west
+  integer :: pe_NE !< MPI PE index of PE to the northeast
+  integer :: pe_SE !< MPI PE index of PE to the southeast
+  integer :: pe_NW !< MPI PE index of PE to the northwest
+  integer :: pe_SW !< MPI PE index of PE to the southwest
   logical :: grid_is_latlon !< Flag to say whether the coordinate is in lat-lon degrees, or meters
   logical :: grid_is_regular !< Flag to say whether point in cell can be found assuming regular Cartesian grid
   real :: Lx !< Length of the domain in x direction
@@ -572,6 +576,14 @@ type :: icebergs !; private !Niki: Ask Alistair why this is private. ice_bergs_i
   type(buffer), pointer :: ibuffer_e=>null() !< Buffer for incoming bergs from the east
   type(buffer), pointer :: obuffer_w=>null() !< Buffer for outgoing bergs to the west
   type(buffer), pointer :: ibuffer_w=>null() !< Buffer for incoming bergs from the west
+  type(buffer), pointer :: obuffer_ne=>null() !< Buffer for outgoing bergs to the northeast
+  type(buffer), pointer :: ibuffer_ne=>null() !< Buffer for incoming bergs from the northeast
+  type(buffer), pointer :: obuffer_se=>null() !< Buffer for outgoing bergs to the southeast
+  type(buffer), pointer :: ibuffer_se=>null() !< Buffer for incoming bergs from the southeast
+  type(buffer), pointer :: obuffer_nw=>null() !< Buffer for outgoing bergs to the northwest
+  type(buffer), pointer :: ibuffer_nw=>null() !< Buffer for incoming bergs from the northwest
+  type(buffer), pointer :: obuffer_sw=>null() !< Buffer for outgoing bergs to the southwest
+  type(buffer), pointer :: ibuffer_sw=>null() !< Buffer for incoming bergs from the southwest
   type(buffer), pointer :: obuffer_io=>null() !< Buffer for outgoing bergs during i/o
   type(buffer), pointer :: ibuffer_io=>null() !< Buffer for incoming bergs during i/o
   ! Budgets
@@ -723,6 +735,7 @@ use mpp_domains_mod, only: mpp_update_domains, mpp_define_domains
 use mpp_domains_mod, only: mpp_get_compute_domain, mpp_get_data_domain, mpp_get_global_domain
 use mpp_domains_mod, only: CYCLIC_GLOBAL_DOMAIN, FOLD_NORTH_EDGE
 use mpp_domains_mod, only: mpp_get_neighbor_pe, NORTH, SOUTH, EAST, WEST
+use mpp_domains_mod, only: NORTH_EAST, SOUTH_EAST, SOUTH_WEST, NORTH_WEST
 use mpp_domains_mod, only: mpp_define_io_domain
 
 use mpp_mod, only: mpp_clock_begin, mpp_clock_end, mpp_clock_id, input_nml_file
@@ -1020,7 +1033,10 @@ real :: dx,dy,dx_dlon,dy_dlat,lat_ref2,lon_ref
   call mpp_get_neighbor_pe(grd%domain, SOUTH, grd%pe_S)
   call mpp_get_neighbor_pe(grd%domain, EAST, grd%pe_E)
   call mpp_get_neighbor_pe(grd%domain, WEST, grd%pe_W)
-
+  call mpp_get_neighbor_pe(grd%domain, NORTH_EAST, grd%pe_NE)
+  call mpp_get_neighbor_pe(grd%domain, SOUTH_EAST, grd%pe_SE)
+  call mpp_get_neighbor_pe(grd%domain, SOUTH_WEST, grd%pe_SW)
+  call mpp_get_neighbor_pe(grd%domain, NORTH_WEST, grd%pe_NW)
 
   folded_north_on_pe = ((dom_y_flags == FOLD_NORTH_EDGE) .and. (grd%jec == gnj))
  !write(stderrunit,'(a,6i4)') 'KID, icebergs_init: pe,n,s,e,w =',mpp_pe(),grd%pe_N,grd%pe_S,grd%pe_E,grd%pe_W, NULL_PE
@@ -1535,6 +1551,15 @@ endif
   bergs%contact_distance=contact_distance
   bergs%force_convergence=force_convergence
   bergs%explicit_inner_mts=explicit_inner_mts
+  if (bergs%sts_dem .and. (.not. bergs%explicit_inner_mts)) then
+    call error_mesg('KID, framework', &
+      'using bergs%sts_dem=.true. requires explicit_inner_mts=true', FATAL)
+  endif
+  if (bergs%sts_dem .and. use_broken_bonds_for_substep_contact) then
+    call error_mesg('KID, framework', &
+      'Setting sts_dem and use_broken_bonds_for_substep_contact both true would ignore inter-conglomerate contact!', &
+      FATAL)
+  endif
   bergs%convergence_tolerance=convergence_tolerance
   ! Thermodynamics (3 equation melting)
   bergs%VK=VK

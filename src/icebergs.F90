@@ -1733,7 +1733,8 @@ subroutine accel_explicit_inner_mts(bergs, berg, i, j, xi, yj, lat, uvel, vvel, 
         do grdi = max(berg%ine-1,bergs%grd%isd+1),min(berg%ine+1,bergs%grd%ied)
         other_berg=>bergs%list(grdi,grdj)%first
         do while (associated(other_berg))
-          if (other_berg%id>0 .and. other_berg%conglom_id.eq.berg%conglom_id .and. other_berg%n_bonds<bergs%max_bonds) then
+          if (other_berg%id>0 .and. (bergs%sts_dem .or. (other_berg%conglom_id.eq.berg%conglom_id)) &
+              .and. other_berg%n_bonds<bergs%max_bonds) then
             if (bergs%dem) then
               call calculate_unbonded_same_conglom_dem_force(bergs, berg, other_berg, &
                 IA_x, IA_y, IAd_x, IAd_y, uvel0, vvel0, uvel0, vvel0)
@@ -6032,6 +6033,7 @@ end subroutine calve_fl_icebergs
 !! is met, which better enforces momentum conservation during collision...this iterative scheme may or may
 !! not be needed to yield consistent fracture behavior. The short steps can also be evaluated explicitly,
 !! which is the default for dem mode.
+!! Single-time-step dem is also processed here, but all fracture is on the short step.
 subroutine evolve_icebergs_mts(bergs)
   ! Arguments
   type(icebergs), pointer :: bergs !< Container for all types and memory
@@ -6056,7 +6058,7 @@ subroutine evolve_icebergs_mts(bergs)
   integer :: ii,jj,maxii,minii,maxjj,minjj
   real :: usum,usum1,usum2,normchange,denom
   real :: MM,AA,R1,groundfrac,gdrag,D
-  logical :: finished,last_iter,had_collision
+  logical :: finished,last_iter,bergs_interactive_saved !,had_collision
 
   ! Multiple Time Step Velocity Verlet:
   ! NOTE: To avoid the need for computationally expensive transfers between processors
@@ -6077,6 +6079,11 @@ subroutine evolve_icebergs_mts(bergs)
   if (bergs%sts_dem) then
     is=grd%isc-1; ie=grd%iec+1
     js=grd%jsc-1; je=grd%jec+1
+    !Turn off interactive bergs for mts Part 1 (contact between different conglomerates).
+    !For sts_dem, all contact (inter- or intra-conglomerate) is done on the single "inner" step
+    !(which is actually the same length as the "outer" step, where external non-contact forces are evaluated.)
+    bergs_interactive_saved=bergs%interactive_icebergs_on
+    bergs%interactive_icebergs_on=.false.
   else
     is=grd%isd; ie=grd%ied
     js=grd%jsd; je=grd%jed
@@ -6117,7 +6124,7 @@ subroutine evolve_icebergs_mts(bergs)
   ii = 0
   usum=0.0; usum1=0.0; usum2=0.0
   finished=.false.
-  had_collision=.false.
+  !had_collision=.false.
 
   if (bergs%force_convergence) then
     last_iter=.false.
@@ -6147,8 +6154,8 @@ subroutine evolve_icebergs_mts(bergs)
               call accel_mts(bergs, berg, i, j, xi, yj, latn, uvel1, vvel1, uvel1, vvel1, dt, rx, ry, &
                 ax1, ay1, axn, ayn, bxn, byn,Fec_x, Fec_y, Fdc_x, Fdc_y)
 
-              if (Fdc_x .ne. 0. .or. Fdc_y .ne. 0. .and. bergs%force_convergence) then
-                had_collision=.true.
+              if ((Fdc_x .ne. 0. .or. Fdc_y .ne. 0.) .and. bergs%force_convergence) then
+                !had_collision=.true.
                 berg%static_berg=0.1
               endif
 
@@ -6158,7 +6165,7 @@ subroutine evolve_icebergs_mts(bergs)
 
               if (bergs%force_convergence) then
                 berg%uvel_prev=berg%uvel+(dt*ax1); berg%vvel_prev=berg%vvel+(dt*ay1) !the new velocity
-                if (berg%halo_berg==0) then
+                if (berg%halo_berg==0 .and. berg%static_berg==0.1) then
                   !convergence will be global, so only contribute bergs on the current PE
                   !if (ii==1) usum=usum+berg%uvel_old**2 + berg%vvel_old**2
                   usum1=usum1+berg%uvel_prev**2+berg%vvel_prev**2
@@ -6191,20 +6198,25 @@ subroutine evolve_icebergs_mts(bergs)
         enddo; enddo
       endif
 
-      if (bergs%force_convergence .and. (.not. last_iter) .and. had_collision) then
+      if (bergs%force_convergence .and. (.not. last_iter)) then ! .and. (had_collision)) then
         ! if (ii==1) call mpp_sum(usum)
         call mpp_sum(usum1)
-        if (ii>1) then
-          denom=sqrt(usum)+sqrt(usum1)
-          if (denom>0) then
-            call mpp_sum(usum2)
-            normchange=2.0*sqrt(usum2)/denom
-          else
-            normchange=0.0
+        if (usum1>0) then
+          if (ii>1) then
+            denom=sqrt(usum)+sqrt(usum1)
+            if (denom>0) then
+              call mpp_sum(usum2)
+              normchange=2.0*sqrt(usum2)/denom
+            else
+              normchange=0.0
+            endif
+            if (normchange<bergs%convergence_tolerance) last_iter=.true.
           endif
-          if (normchange<bergs%convergence_tolerance) last_iter=.true.
+          usum=usum1 !previous norm (squared)
+        else
+          !no contact, so exit
+          finished=.true.
         endif
-        usum=usum1 !previous norm (squared)
       else
         finished=.true.
       endif
@@ -6214,6 +6226,8 @@ subroutine evolve_icebergs_mts(bergs)
       usum1=0.0; usum2=0.0
 
     enddo
+
+    if (bergs%sts_dem) bergs%interactive_icebergs_on=bergs_interactive_saved !allows contact for Part 3 if true
 
     if (bergs%dem .and. (.not. break_bonds_on_sub_steps)) call break_bonds_dem(bergs)
 

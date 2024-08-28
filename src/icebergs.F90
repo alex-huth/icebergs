@@ -58,7 +58,7 @@ use ice_bergs_framework, only: short_step_mts_grounding, radius_based_drag
 use ice_bergs_io,        only: ice_bergs_io_init, write_restart_bergs, write_trajectory, write_bond_trajectory
 use ice_bergs_io,        only: read_restart_bergs, read_restart_calving
 use ice_bergs_io,        only: read_restart_bonds
-use ice_bergs_io,        only: read_ocean_depth
+use ice_bergs_io,        only: read_ocean_depth, read_ice_sheet_basins
 
 implicit none ; private
 
@@ -117,8 +117,8 @@ subroutine icebergs_init(bergs, &
   logical, intent(in), optional :: fractional_area !< If true, ice_area contains cell area as fraction of entire spherical surface
   ! Local variables
   type(icebergs_gridded), pointer :: grd => null()
-  integer :: nbonds
-  logical :: check_bond_quality
+  integer :: nbonds, nbasins, id_class
+  logical :: check_bond_quality, lerr
   integer :: stdlogunit, stderrunit
 
   ! Get the stderr and stdlog unit numbers
@@ -130,6 +130,8 @@ subroutine icebergs_init(bergs, &
              gni, gnj, layout, io_layout, axes, dom_x_flags, dom_y_flags, &
              dt, Time, ice_lon, ice_lat, ice_wet, ice_dx, ice_dy, ice_area, &
              cos_rot, sin_rot, ocean_depth=ocean_depth, maskmap=maskmap, fractional_area=fractional_area)
+
+  grd=>bergs%grd
 
   call unit_testing(bergs)
 
@@ -149,6 +151,18 @@ subroutine icebergs_init(bergs, &
 
   !Reading ocean depth from a file
   if (bergs%read_ocean_depth_from_file) call read_ocean_depth(bergs%grd)
+  ! Reading the ice-sheet basins of origin for the bergs
+  if (bergs%use_berg_origin_basins) then
+    call read_ice_sheet_basins(bergs%grd)
+    id_class=register_static_field('icebergs', 'ice_sheet_basins_static', axes, &
+                 'Static ice-sheet basins of origin for icebergs', 'none')
+    if (id_class>0) lerr=send_data(id_class, grd%ice_sheet_basins(grd%isc:grd%iec,grd%jsc:grd%jec))
+  else
+    bergs%nbasins=1
+    grd%ice_sheet_basins(:,:)=0.0
+  endif
+  allocate( grd%melt_by_ice_sheet_basin(grd%isd:grd%ied, grd%jsd:grd%jed, bergs%nbasins) )
+  grd%melt_by_ice_sheet_basin(:,:,:)=0.
 
   if (bergs%iceberg_bonds_on) then
     if (bergs%manually_initialize_bonds) then
@@ -3132,6 +3146,13 @@ subroutine thermodynamics(bergs)
           grd%melt_by_class(i,j,k)=grd%melt_by_class(i,j,k)+melt/grd%area(i,j)*this%mass_scaling ! kg/m2/s
         endif
 
+        if (bergs%use_berg_origin_basins) then
+          if (this%basin>0) then
+            grd%melt_by_ice_sheet_basin(i,j,this%basin)=grd%melt_by_ice_sheet_basin(i,j,this%basin)+&
+                                                        melt/grd%area(i,j)*this%mass_scaling ! kg/m2/s
+          endif
+        endif
+
         melt=melt*this%heat_density ! kg/s x J/kg = J/s
         grd%calving_hflx(i,j)=grd%calving_hflx(i,j)+melt/grd%area(i,j)*this%mass_scaling ! W/m2
         bergs%net_heat_to_ocean=bergs%net_heat_to_ocean+melt*this%mass_scaling*bergs%dt ! J
@@ -5152,6 +5173,7 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   grd%mass(:,:)=0.
   grd%virtual_area(:,:)=0.
   grd%melt_by_class(:,:,:)=0.
+  grd%melt_by_ice_sheet_basin(:,:,:) = 0.
   grd%melt_buoy_fl(:,:)=0.
   grd%melt_eros_fl(:,:)=0.
   grd%melt_conv_fl(:,:)=0.
@@ -5613,6 +5635,10 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
     lerr=send_data(grd%id_fay, tauya(:,:), Time)
   if (grd%id_melt_by_class>0) &
     lerr=send_data(grd%id_melt_by_class, grd%melt_by_class(grd%isc:grd%iec,grd%jsc:grd%jec,:), Time)
+  if (grd%id_melt_by_ice_sheet_basin>0) &
+    lerr=send_data(grd%id_melt_by_ice_sheet_basin, grd%melt_by_ice_sheet_basin(grd%isc:grd%iec,grd%jsc:grd%jec,:), Time)
+  if (grd%id_ice_sheet_basins>0) &
+    lerr=send_data(grd%id_ice_sheet_basins, grd%ice_sheet_basins(grd%isc:grd%iec,grd%jsc:grd%jec), Time)
   if (grd%id_melt_buoy_fl>0) &
     lerr=send_data(grd%id_melt_buoy_fl, grd%melt_buoy_fl(grd%isc:grd%iec,grd%jsc:grd%jec), Time)
   if (grd%id_melt_eros_fl>0) &
@@ -6362,6 +6388,13 @@ subroutine calve_icebergs(bergs)
             newberg%ang_vel=0.; newberg%ang_accel=0.; newberg%rot=0.
           endif
 
+          if (bergs%use_berg_origin_basins) then
+            if (.not. allocations_done) then
+              if (.not. allocated(newberg%basin)) allocate(newberg%basin)
+            endif
+            newberg%basin=int(grd%ice_sheet_basins(i,j))
+          endif
+
           if (.not. bergs%old_interp_flds_order) then
             !interpolate gridded variables to new iceberg
             if (grd%tidal_drift>0.) then
@@ -6570,6 +6603,11 @@ subroutine calve_fl_icebergs(bergs,pberg,k,l_b,fl_disp_x,fl_disp_y,berg_from_bit
   if (bergs%dem) then
     allocate(cberg%ang_vel,cberg%ang_accel,cberg%rot)
     cberg%ang_vel=0.; cberg%ang_accel=0.; cberg%rot=0.
+  endif
+
+  if (bergs%use_berg_origin_basins) then
+    allocate(cberg%basin)
+    cberg%basin=pberg%basin
   endif
 
   call add_new_berg_to_list(bergs%list(cberg%ine,cberg%jne)%first, cberg)
@@ -8230,6 +8268,8 @@ subroutine icebergs_end(bergs)
   deallocate(bergs%grd%cn)
   deallocate(bergs%grd%hi)
   deallocate(bergs%grd%melt_by_class)
+  deallocate(bergs%grd%melt_by_ice_sheet_basin)
+  deallocate(bergs%grd%ice_sheet_basins)
   deallocate(bergs%grd%melt_buoy_fl)
   deallocate(bergs%grd%melt_eros_fl)
   deallocate(bergs%grd%melt_conv_fl)

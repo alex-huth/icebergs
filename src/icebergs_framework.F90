@@ -62,6 +62,7 @@ logical :: break_bonds_on_sub_steps=.false.
 logical :: skip_first_outer_mts_step=.false.
 logical :: no_frac_first_ts=.false.
 logical :: footloose=.false. !< Turn footloose calving on/off
+logical :: use_berg_origin_basins=.false. !< If T, save berg melt associated with the each ice-sheet basin of origin for the bergs
 
 !Public params !Niki: write a subroutine to expose these
 public nclasses,buffer_width,buffer_width_traj,buffer_width_bond_traj
@@ -72,7 +73,7 @@ public mts,save_bond_traj,ewsame,iceberg_bonds_on
 public dem, save_bond_forces, orig_dem_moment_of_inertia
 public short_step_mts_grounding, radius_based_drag
 public A68_test, A68_xdisp, A68_ydisp
-public footloose
+public footloose, use_berg_origin_basins
 
 !Public types
 public icebergs_gridded, xyt, iceberg, icebergs, buffer, bond, bond_xyt
@@ -145,6 +146,8 @@ type :: icebergs_gridded
   real, dimension(:,:), pointer :: cos=>null() !< Cosine from rotation matrix to lat-lon coords
   real, dimension(:,:), pointer :: sin=>null() !< Sine from rotation matrix to lat-lon coords
   real, dimension(:,:), pointer :: ocean_depth=>NULL() !< Depth of ocean (m)
+  real, dimension(:,:), pointer :: ice_sheet_basins=>NULL() !< Ice-sheet basins of origin for bergs (e.g. IMBIE basins)
+  real, dimension(:,:,:), pointer :: melt_by_ice_sheet_basin=>null() !< Total melt rate for bergs from each ice-sheet basin (kg/s/m^2)
   real, dimension(:,:), pointer :: uo=>null() !< Ocean zonal flow (m/s)
   real, dimension(:,:), pointer :: vo=>null() !< Ocean meridional flow (m/s)
   real, dimension(:,:), pointer :: ui=>null() !< Ice zonal flow (m/s)
@@ -219,7 +222,7 @@ type :: icebergs_gridded
   integer :: id_count=-1, id_chksum=-1, id_u_iceberg=-1, id_v_iceberg=-1, id_sss=-1, id_ustar_iceberg
   integer :: id_spread_uvel=-1, id_spread_vvel=-1
   integer :: id_melt_m_per_year=-1
-  integer :: id_ocean_depth=-1
+  integer :: id_ocean_depth=-1, id_ice_sheet_basins=-1, id_melt_by_ice_sheet_basin=-1
   integer :: id_melt_by_class=-1, id_melt_buoy_fl=-1, id_melt_eros_fl=-1, id_melt_conv_fl=-1
   integer :: id_fl_parent_melt=-1, id_fl_child_melt=-1
   !>@}
@@ -284,6 +287,8 @@ type :: xyt
   real, allocatable :: ang_vel !< Angular velocity
   real, allocatable :: ang_accel !< Angular acceleration
   real, allocatable :: rot !< Accumulated rotation
+  ! If use_berg_origin_basins
+  integer, allocatable :: basin
 end type xyt
 
 !> An iceberg object, used as a link in a linked list
@@ -356,6 +361,8 @@ type :: iceberg
   real, allocatable :: ang_vel !< Angular velocity
   real, allocatable :: ang_accel !< Angular acceleration
   real, allocatable :: rot !< Accumulated rotation
+  ! If use_berg_origin_basins
+  integer, allocatable :: basin
 end type iceberg
 
 !> A bond object connecting two bergs, used as a link in a linked list
@@ -518,6 +525,8 @@ type :: icebergs !; private !Niki: Ask Alistair why this is private. ice_bergs_i
   logical :: tang_crit_int_damp_on=.true. !<crit interaction damping for tangential component?
   logical :: use_old_spreading=.true. !< If true, spreads iceberg mass as if the berg is one grid cell wide
   logical :: read_ocean_depth_from_file=.false. !< If true, ocean depth is read from a file.
+  logical :: use_berg_origin_basins=.false. !< If T, save berg melt associated with the each ice-sheet basin of origin for the bergs
+  integer :: nbasins=1 !< Number of ice-sheet basins of origin for the bergs
   integer(kind=8) :: debug_iceberg_with_id = -1 !< If positive, monitors a berg with this id
 
   real :: length_for_manually_initialize_bonds=1000.0 !< If manually initialing bonds, only  bond if dist between particles is < this length -Added by Alex
@@ -603,7 +612,8 @@ type :: icebergs !; private !Niki: Ask Alistair why this is private. ice_bergs_i
   real :: ocean_drag_scale=1. !< Scaling factor for the ocean drag coefficients
   ! Footloose calving parameters
   logical :: footloose=.false. !< Turn footloose calving on/off
-  logical :: fl_init_child_xy_by_pe=.false. !< True: position of a new footloose child berg along the parent perimeter is random, yet constant for each PE (old bug). False: fully-random.
+  logical :: fl_init_child_xy_by_pe=.false. !< True: old bug that randomly positions a new footloose child berg along the parent perimeter acoording to PE
+                                            !! (not consistent under different PE layouts). False: Random positioning by element
   real :: fl_youngs=1.e7 !< Young's modulus for footloose calculations (Pa)
   real :: fl_strength=250. !< yield stress for footloose calculations (kPa)
   logical :: displace_fl_bergs=.true. !< footloose berg positions are randomly assigned along edges of parent berg
@@ -777,6 +787,8 @@ logical :: input_freq_distribution=.false. ! Flag to show if input distribution 
 logical :: read_old_restarts=.false. ! Legacy option that does nothing
 logical :: use_old_spreading=.true. ! If true, spreads iceberg mass as if the berg is one grid cell wide
 logical :: read_ocean_depth_from_file=.false. ! If true, ocean depth is read from a file.
+integer :: nbasins=1 !< Number of ice-sheet basins of origin for the bergs
+real, dimension(:), allocatable :: basin_arr !< array of basin IDs (/ I, I = 1, nbasins) /)
 integer :: mts_sub_steps=-1 ! If -1, the number of mts sub-steps will be automatically determined
 logical :: remove_unused_bergs=.true. ! Remove unneeded bergs after PEs transfers
 real :: contact_distance=0.0 ! For unbonded berg interactions, collision is assumed at max(contact_distance,sum of the 2 bergs radii)
@@ -813,7 +825,8 @@ real :: constant_width=0. ! If constant_interaction_LW, the constant width used.
 real :: ocean_drag_scale=1. !< Scaling factor for the ocean drag coefficients
 ! Footloose calving parameters
 !logical :: footloose=.false. !< Turn footloose calving on/off
-logical :: fl_init_child_xy_by_pe=.false. !< True: position of a new footloose child berg along the parent perimeter is random, yet constant for each PE (old bug). False: fully-random.
+logical :: fl_init_child_xy_by_pe=.false. !< True: old bug that randomly positions a new footloose child berg along the parent perimeter acoording to PE
+                                          !! (not consistent under different PE layouts). False: Random positioning by element
 real :: fl_youngs=1.e7 !< Young's modulus for footloose calculations (Pa)
 real :: fl_strength=250. !< yield stress for footloose calculations (kPa)
 logical :: displace_fl_bergs=.true. ! footloose berg positions are randomly assigned along edges of parent berg
@@ -840,7 +853,7 @@ namelist /icebergs_nml/ verbose, budget, halo,  traj_sample_hrs, initial_mass, t
          read_old_restarts, tau_calving, read_ocean_depth_from_file, melt_cutoff,apply_thickness_cutoff_to_gridded_melt,&
          apply_thickness_cutoff_to_bergs_melt, use_mixed_melting, internal_bergs_for_drag, coastal_drift, tidal_drift,&
          mts,ewsame,mts_sub_steps,contact_distance,length_for_manually_initialize_bonds,&
-         manually_initialize_bonds_from_radii,contact_spring_coef,fracture_criterion, &
+         manually_initialize_bonds_from_radii,contact_spring_coef,fracture_criterion, use_berg_origin_basins, nbasins, &
          debug_write,cdrag_grounding,h_to_init_grounding,frac_thres_scaling,frac_thres_n,frac_thres_t,save_bond_traj,&
          remove_unused_bergs,force_convergence,explicit_inner_mts,convergence_tolerance,dem,ignore_tangential_force,poisson,&
          dem_spring_coef,dem_damping_coef,dem_beam_test,constant_interaction_LW,constant_length,constant_width,&
@@ -856,7 +869,7 @@ namelist /icebergs_nml/ verbose, budget, halo,  traj_sample_hrs, initial_mass, t
          no_frac_first_ts, use_grounding_torque, short_step_mts_grounding, radius_based_drag, save_bond_forces
 
 ! Local variables
-integer :: ierr, iunit, i, j, id_class, axes3d(3), is,ie,js,je,np
+integer :: ierr, iunit, i, j, id_class, axes3d(3), axes3d_b(3), is,ie,js,je,np
 type(icebergs_gridded), pointer :: grd
 real :: lon_mod, big_number
 logical :: lerr
@@ -1015,6 +1028,7 @@ real :: dx,dy,dx_dlon,dy_dlat,lat_ref2,lon_ref
   allocate( grd%parity_x(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%parity_x(:,:)=1.
   allocate( grd%parity_y(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%parity_y(:,:)=1.
   allocate( grd%iceberg_counter_grd(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%iceberg_counter_grd(:,:)=0
+  allocate( grd%ice_sheet_basins(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%ice_sheet_basins(:,:)=0.
 
  !write(stderrunit,*) 'KID: copying grid'
   ! Copy data declared on ice model computational domain
@@ -1286,6 +1300,11 @@ if (iceberg_bonds_on) then
   buffer_width_traj=buffer_width_traj+1
 endif
 
+if (use_berg_origin_basins) then
+  buffer_width=buffer_width+1
+  buffer_width_traj=buffer_width_traj+1
+endif
+
 !must use verlet with mts - Alex
 if (mts) then
   buffer_width_traj=buffer_width_traj+4 !to accomodate n_bonds,fast-step accel terms, overall accel terms
@@ -1377,6 +1396,7 @@ endif
   bergs%apply_thickness_cutoff_to_gridded_melt=apply_thickness_cutoff_to_gridded_melt
   bergs%melt_cutoff=melt_cutoff
   bergs%read_ocean_depth_from_file=read_ocean_depth_from_file
+  bergs%use_berg_origin_basins=use_berg_origin_basins
   bergs%const_gamma=const_gamma
   bergs%Gamma_T_3EQ=Gamma_T_3EQ
   bergs%pass_fields_to_ocean_model=pass_fields_to_ocean_model
@@ -1564,6 +1584,16 @@ endif
   id_class = diag_axis_init('mass_class', initial_mass, 'kg','Z', 'iceberg mass')
   axes3d(1:2)=axes
   axes3d(3)=id_class
+
+  if (.not. bergs%use_berg_origin_basins) nbasins=1
+  nbasins=max(nbasins,1)
+  bergs%nbasins=nbasins
+  allocate(basin_arr(bergs%nbasins))
+  basin_arr = (/ (I, I = 1, bergs%nbasins) /)
+  id_class = diag_axis_init('basin_id', basin_arr, 'none','Z', 'iceberg source basins')
+  axes3d_b(1:2)=axes
+  axes3d_b(3)=id_class
+
   grd%id_calving=register_diag_field('icebergs', 'calving', axes, Time, &
      'Incoming Calving mass rate', 'kg/s')
   grd%id_calving_hflx_in=register_diag_field('icebergs', 'calving_hflx_in', axes, Time, &
@@ -1658,8 +1688,13 @@ endif
      'Y-stress on ice from atmosphere', 'N m^-2')
   grd%id_ocean_depth=register_diag_field('icebergs', 'Depth', axes, Time, &
      'Ocean Depth', 'm')
+  grd%id_ice_sheet_basins=register_diag_field('icebergs', 'ice_sheet_basins', axes, Time, &
+     'Ice-sheet basins of origin for icebergs', 'none')
   grd%id_melt_by_class=register_diag_field('icebergs', 'melt_by_class', axes3d, Time, &
      'Total ice melt (bergs+bits+FL_bits) by class (z-axis labels correspond to Southern hemisphere classes)', &
+     'kg/(m^2*s)')
+  grd%id_melt_by_ice_sheet_basin=register_diag_field('icebergs', 'melt_by_ice_sheet_basin', axes3d_b, Time, &
+     'Total ice melt (bergs+bits+FL_bits) by ice-sheet basin', &
      'kg/(m^2*s)')
   grd%id_melt_buoy_fl=register_diag_field('icebergs', 'melt_buoy_fl', axes, Time, &
      'Buoyancy component of footloose iceberg melt rate', 'kg/(m^2*s)')
@@ -3331,6 +3366,10 @@ type(bond), pointer :: current_bond
     call push_buffer_value(buff%data(:,n), counter, berg%rot)
   endif
 
+  if (use_berg_origin_basins) then
+    call push_buffer_value(buff%data(:,n), counter, berg%basin)
+  endif
+
   if (max_bonds .gt. 0) then
     current_bond=>berg%first_bond
     do k = 1,max_bonds
@@ -3503,6 +3542,8 @@ real :: temp_lon,temp_lat,length
 
   if (dem) allocate(localberg%ang_vel,localberg%ang_accel,localberg%rot)
 
+  if (use_berg_origin_basins) allocate(localberg%basin)
+
   counter = 0
   call pull_buffer_value(buff%data(:,n), counter, localberg%lon)
   call pull_buffer_value(buff%data(:,n), counter, localberg%lat)
@@ -3568,6 +3609,10 @@ real :: temp_lon,temp_lat,length
     call pull_buffer_value(buff%data(:,n), counter, localberg%ang_vel)
     call pull_buffer_value(buff%data(:,n), counter, localberg%ang_accel)
     call pull_buffer_value(buff%data(:,n), counter, localberg%rot)
+  endif
+
+  if (use_berg_origin_basins) then
+    call pull_buffer_value(buff%data(:,n), counter, localberg%basin)
   endif
 
   !These quantities no longer need to be passed between processors
@@ -3825,6 +3870,10 @@ subroutine pack_traj_into_buffer2(traj, buff, n, save_short_traj, save_fl_traj)
       call push_buffer_value(buff%data(:,n), counter, traj%ang_accel)
       call push_buffer_value(buff%data(:,n), counter, traj%rot)
     endif
+
+    if (use_berg_origin_basins) then
+      call push_buffer_value(buff%data(:,n), counter, traj%basin)
+    endif
   endif
 
 end subroutine pack_traj_into_buffer2
@@ -3851,6 +3900,7 @@ subroutine unpack_traj_from_buffer2(first, buff, n, save_short_traj, save_fl_tra
   endif
 
   if (dem) allocate(traj%ang_vel,traj%ang_accel,traj%rot)
+  if (use_berg_origin_basins) allocate(traj%basin)
 
   counter = 0
   call pull_buffer_value(buff%data(:,n),counter,traj%lon)
@@ -3917,6 +3967,10 @@ subroutine unpack_traj_from_buffer2(first, buff, n, save_short_traj, save_fl_tra
       call pull_buffer_value(buff%data(:,n), counter, traj%ang_vel)
       call pull_buffer_value(buff%data(:,n), counter, traj%ang_accel)
       call pull_buffer_value(buff%data(:,n), counter, traj%rot)
+    endif
+
+    if (use_berg_origin_basins) then
+      call pull_buffer_value(buff%data(:,n), counter, traj%basin)
     endif
   endif
   call append_posn(first, traj)
@@ -4467,6 +4521,7 @@ integer :: stderrunit
   endif
 
   if (dem) allocate(berg%ang_vel,berg%ang_accel,berg%rot)
+  if (use_berg_origin_basins) allocate(berg%basin)
 
   berg=bergvals
   berg%prev=>null()
@@ -5355,6 +5410,7 @@ endif
   endif
 
   if (dem) allocate(posn%ang_vel,posn%ang_accel,posn%rot)
+  if (use_berg_origin_basins) allocate(posn%basin)
 
   if (save_bond_traj .and. dem) allocate(bond_posn%tangd1,bond_posn%tangd2,bond_posn%nstress,&
                                          bond_posn%sstress,bond_posn%rel_rotation,bond_posn%broken)
@@ -5449,6 +5505,10 @@ endif
             posn%ang_accel=this%ang_accel
             posn%rot=this%rot
           endif
+
+          if (use_berg_origin_basins) then
+            posn%basin=this%basin
+          endif
         endif
 
         call push_posn(this%trajectory, posn)
@@ -5516,6 +5576,7 @@ type(xyt), pointer :: new_posn
   endif
 
   if (dem) allocate(new_posn%ang_vel,new_posn%ang_accel,new_posn%rot)
+  if (use_berg_origin_basins) allocate(new_posn%basin)
 
   new_posn=posn_vals
   new_posn%next=>trajectory
@@ -5562,6 +5623,7 @@ type(xyt), pointer :: new_posn,next,last
   endif
 
   if (dem) allocate(new_posn%ang_vel,new_posn%ang_accel,new_posn%rot)
+  if (use_berg_origin_basins) allocate(new_posn%basin)
 
   new_posn=posn_vals
   new_posn%next=>null()

@@ -1127,7 +1127,6 @@ real :: dx,dy,dx_dlon,dy_dlat,lat_ref2,lon_ref
   allocate( grd%parity_y(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%parity_y(:,:)=1.
   allocate( grd%iceberg_counter_grd(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%iceberg_counter_grd(:,:)=0
   allocate( grd%ice_sheet_basins(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%ice_sheet_basins(:,:)=0.
-  allocate( grd%frac_shelf_h(grd%isd:grd%ied, grd%jsd:grd%jed) )
 
  !write(stderrunit,*) 'KID: copying grid'
   ! Copy data declared on ice model computational domain
@@ -1402,6 +1401,7 @@ endif
 if (use_berg_origin_basins) then
   buffer_width=buffer_width+1
   buffer_width_traj=buffer_width_traj+1
+endif
 if (sts_dem) then
   !single time stepping is implemented just like multiple timestepping, but with just with 1 sub-step
   !mts must be true
@@ -3904,6 +3904,7 @@ type(bond), pointer :: current_bond
 
   if (use_berg_origin_basins) then
     call push_buffer_value(buff%data(:,n), counter, berg%basin)
+  endif
   if (tabular_calving_global) then
     call push_buffer_value(buff%data(:,n), counter, berg%mask_status)
   endif
@@ -4152,6 +4153,7 @@ real :: temp_lon,temp_lat,length
 
   if (use_berg_origin_basins) then
     call pull_buffer_value(buff%data(:,n), counter, localberg%basin)
+  endif
   if (tabular_calving_global) then
     call pull_buffer_value(buff%data(:,n), counter, localberg%mask_status)
   endif
@@ -4417,6 +4419,7 @@ subroutine pack_traj_into_buffer2(traj, buff, n, save_short_traj, save_fl_traj)
 
     if (use_berg_origin_basins) then
       call push_buffer_value(buff%data(:,n), counter, traj%basin)
+    endif
     if (tabular_calving_global) then
       call push_buffer_value(buff%data(:,n), counter, traj%mask_status)
     endif
@@ -4519,6 +4522,7 @@ subroutine unpack_traj_from_buffer2(first, buff, n, save_short_traj, save_fl_tra
 
     if (use_berg_origin_basins) then
       call pull_buffer_value(buff%data(:,n), counter, traj%basin)
+    endif
     if (tabular_calving_global) then
       call pull_buffer_value(buff%data(:,n), counter, traj%mask_status)
     endif
@@ -6191,6 +6195,7 @@ endif
 
           if (use_berg_origin_basins) then
             posn%basin=this%basin
+          endif
           if (tabular_calving_global) then
             posn%mask_status=this%mask_status
           endif

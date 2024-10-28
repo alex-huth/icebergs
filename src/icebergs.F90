@@ -5802,6 +5802,7 @@ subroutine calve_icebergs(bergs)
               if (.not. allocated(newberg%basin)) allocate(newberg%basin)
             endif
             newberg%basin=int(grd%ice_sheet_basins(i,j))
+          endif
           if (bergs%tabular_calving) then
             if (.not. allocated(newberg%mask_status)) allocate(newberg%mask_status)
             newberg%mask_status=grd%msk(i,j)
@@ -6020,6 +6021,7 @@ subroutine calve_fl_icebergs(bergs,pberg,k,l_b,fl_disp_x,fl_disp_y,berg_from_bit
   if (bergs%use_berg_origin_basins) then
     allocate(cberg%basin)
     cberg%basin=pberg%basin
+  endif
   if (bergs%tabular_calving) then
     allocate(cberg%mask_status)
     cberg%mask_status=grd%msk(cberg%ine,cberg%jne)

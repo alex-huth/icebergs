@@ -841,6 +841,7 @@ character(len=1), dimension(1) :: dim_names_1d
      if (use_berg_origin_basins) then
        allocate(localberg%basin)
        allocate(basin(nbergs_in_file))
+     endif
      if (tabular_calving_global) then
        allocate(localberg%mask_status)
      endif
@@ -897,6 +898,7 @@ character(len=1), dimension(1) :: dim_names_1d
      if (use_berg_origin_basins) then
        basin = 0
        call register_restart_field(fileobj,'basin'    ,basin    ,dim_names_1d,is_optional=.true.)
+     endif
      if (tabular_calving_global) then
        mask_status = 0
        call register_restart_field(fileobj,'mask_status',mask_status,dim_names_1d,is_optional=.true.)
@@ -988,6 +990,7 @@ character(len=1), dimension(1) :: dim_names_1d
 
      if (use_berg_origin_basins) then
        localberg%basin    =basin(k)
+     endif
      if (tabular_calving_global) then
        localberg%mask_status=grd%msk(ine(k),jne(k))
      endif
@@ -1992,6 +1995,7 @@ integer :: ntrajs_sent_io,ntrajs_rcvd_io
 
         if (use_berg_origin_basins) then
           baid = def_var(ncid, 'basin', NF_INT, i_dim)
+        endif
         if (tabular_calving_global) then
           tmid  = def_var(ncid, 'mask_status', NF_DOUBLE, i_dim)
         endif
@@ -2117,7 +2121,7 @@ integer :: ntrajs_sent_io,ntrajs_rcvd_io
         if (use_berg_origin_basins) then
           call put_att(ncid, baid, 'long_name', 'ice-sheet basin of origin')
           call put_att(ncid, baid, 'units', 'none')
-
+        endif
         if (tabular_calving_global) then
           call put_att(ncid, tmid, 'long_name', 'mask status')
           call put_att(ncid, tmid, 'units', 'none')

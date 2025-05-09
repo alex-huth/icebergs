@@ -478,6 +478,7 @@ type :: icebergs !; private !Niki: Ask Alistair why this is private. ice_bergs_i
   logical :: separate_distrib_for_n_hemisphere=.False. ! Flag to use a separate berg distribution/mass/mass scaling/init thickness for N hemisphere
   real, dimension(:), pointer :: initial_mass_n, distribution_n, mass_scaling_n !< Northern hemisphere
   real, dimension(:), pointer :: initial_thickness_n, initial_width_n, initial_length_n !< Northern hemisphere
+  real :: ns_trans_lat=0. !< Latitude at which to transition from Sourthern to Northern hemisphere distributions
   logical :: restarted=.false. !< Indicate whether we read state from a restart or not
   logical :: use_operator_splitting=.true. !< Use first order operator splitting for thermodynamics
   logical :: add_weight_to_ocean=.true. !< Add weight of bergs to ocean
@@ -806,6 +807,7 @@ real, dimension(nclasses) :: initial_mass_n=(/4.58e8, 3.61e9, 1.22e10, 2.91e10, 
 real, dimension(nclasses) :: distribution_n=(/0.14, 0.15, 0.20, 0.15, 0.08, 0.07, 0.05, 0.05, 0.05, 0.05/) ! for N hemisphere
 real, dimension(nclasses) :: mass_scaling_n=(/200, 50, 25, 13, 8, 5, 2, 1, 1, 1/) ! for N hemisphere
 real, dimension(nclasses) :: initial_thickness_n=(/80.4, 159.5, 240., 320., 360., 360., 360., 360., 360., 360./) ! for N hemisphere
+real :: ns_trans_lat=0. !< Latitude at which to transition from Sourthern to Northern hemisphere distributions
 integer(kind=8) :: debug_iceberg_with_id = -1 ! If positive, monitors a berg with this id
 ! DEM-mode parameters
 !logical :: dem=.false. !if T, run in DEM-mode with angular terms, variable stiffness, etc
@@ -860,7 +862,7 @@ namelist /icebergs_nml/ verbose, budget, halo,  traj_sample_hrs, initial_mass, t
          fl_init_child_xy_by_pe, footloose,displace_fl_bergs,&
          fl_style,fl_bits_erosion_to_bergy_bits, save_fl_traj,&
          new_berg_from_fl_bits_mass_thres,separate_distrib_for_n_hemisphere,&
-         initial_mass_n, distribution_n, mass_scaling_n, initial_thickness_n,&
+         initial_mass_n, distribution_n, mass_scaling_n, initial_thickness_n, ns_trans_lat,&
          fl_youngs, fl_strength,  save_all_traj_year, save_nonfl_traj_by_class,&
          save_traj_by_class_start_mass_thres_n, save_traj_by_class_start_mass_thres_s,traj_area_thres_sntbc,&
          traj_area_thres_fl,tau_is_velocity, ocean_drag_scale, A68_test, &
@@ -1379,6 +1381,7 @@ endif
   bergs%tangental_damping_coef=tangental_damping_coef
   bergs%LoW_ratio=LoW_ratio
   bergs%separate_distrib_for_n_hemisphere=separate_distrib_for_n_hemisphere
+  bergs%ns_trans_lat=ns_trans_lat
   bergs%use_operator_splitting=use_operator_splitting
   bergs%bergy_bit_erosion_fraction=bergy_bit_erosion_fraction
   bergs%sicn_shift=sicn_shift
@@ -7504,10 +7507,10 @@ integer function check_for_duplicate_ids_in_list(nbergs, ids, verbose)
     endif
     call mpp_sum(ii)
     if (ii > 1) then
-      if (verbose) write(stderrunit,*) 'Duplicated berg across PEs with id=',id,lid,' seen',ii,' times pe=',mpp_pe(),k,j,nbergs
+      if (verbose .and. ii==lid) write(stderrunit,*) 'Duplicated berg across PEs with id=',id,lid,' seen',ii,' times pe=',mpp_pe(),k,j,nbergs
       check_for_duplicate_ids_in_list = check_for_duplicate_ids_in_list + 1
     elseif (ii == 0) then
-      if (verbose) write(stderrunit,*) 'Berg not accounted for on all PEs with id=',id,lid,' seen',ii,' times pe=',mpp_pe(),k,j,nbergs
+      if (verbose .and. really_debug) write(stderrunit,*) 'Berg not accounted for on all PEs with id=',id,lid,' seen',ii,' times pe=',mpp_pe(),k,j,nbergs
     endif
   enddo
 

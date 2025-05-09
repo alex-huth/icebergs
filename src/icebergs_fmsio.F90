@@ -1499,7 +1499,7 @@ type(randomNumberStream) :: rns
              rns=initializeRandomNumberStream(i+10000*j)
              call getRandomNumbers(rns,randnum(1,:))
              do k=1, nclasses
-               if (grd%lat(i,j)<0.) then
+               if (grd%lat(i,j)<bergs%ns_trans_lat) then
                  grd%stored_ice(i,j,k)=randnum(1,k) * grd%msk(i,j) * bergs%initial_mass_s(k) * bergs%mass_scaling_s(k)
                else
                  grd%stored_ice(i,j,k)=randnum(1,k) * grd%msk(i,j) * bergs%initial_mass_n(k) * bergs%mass_scaling_n(k)
@@ -1513,7 +1513,7 @@ type(randomNumberStream) :: rns
           rns = initializeRandomNumberStream(i)
           call getRandomNumbers(rns,randnum)
           do k=1, nclasses
-            where (grd%lat(i,grd%jsc:grd%jec)<0.)
+            where (grd%lat(i,grd%jsc:grd%jec)<bergs%ns_trans_lat)
              grd%stored_ice(i,grd%jsc:grd%jec,k) = randnum(:,k) * grd%msk(i,grd%jsc:grd%jec) * &
                & bergs%initial_mass_s(k) * bergs%mass_scaling_s(k)
            elsewhere

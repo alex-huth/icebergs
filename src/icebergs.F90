@@ -3138,7 +3138,7 @@ subroutine thermodynamics(bergs)
         grd%floating_melt(i,j)=grd%floating_melt(i,j)+melt/grd%area(i,j)*this%mass_scaling ! kg/m2/s
 
         if (grd%id_melt_by_class>0) then
-          if (this%lat<0.) then
+          if (this%start_lat<bergs%ns_trans_lat) then
             k=minloc(abs(bergs%initial_mass_s-this%start_mass),1)
           else
             k=minloc(abs(bergs%initial_mass_n-this%start_mass),1)
@@ -6224,7 +6224,7 @@ subroutine accumulate_calving(bergs)
 
   remaining_dist_s=1.; remaining_dist_n=1.
   do k=1, nclasses
-    where (grd%lat<0.)
+    where (grd%lat<bergs%ns_trans_lat)
       grd%stored_ice(:,:,k)=grd%stored_ice(:,:,k)+bergs%dt*grd%calving(:,:)*bergs%distribution_s(k)
     elsewhere
       grd%stored_ice(:,:,k)=grd%stored_ice(:,:,k)+bergs%dt*grd%calving(:,:)*bergs%distribution_n(k)
@@ -6236,7 +6236,7 @@ subroutine accumulate_calving(bergs)
     write(stderrunit,*) 'KID, accumulate_calving: sum(distribution)>1!!!',remaining_dist_s, remaining_dist_n
     call error_mesg('KID, accumulate_calving', 'calving is OVER distributed!', WARNING)
   endif
-  where (grd%lat<0.)
+  where (grd%lat<bergs%ns_trans_lat)
     remaining_dist=remaining_dist_s
   elsewhere
     remaining_dist=remaining_dist_n
@@ -6294,7 +6294,7 @@ subroutine calve_icebergs(bergs)
     do j=grd%jsc, grd%jec
       do i=grd%isc, grd%iec
         ddt=0.; icnt=0
-        if (grd%lat(i,j)<0.) then
+        if (grd%lat(i,j)<bergs%ns_trans_lat) then
           initial_mass=>bergs%initial_mass_s(k); mass_scaling=>bergs%mass_scaling_s(k)
           initial_thickness=>bergs%initial_thickness_s(k)
           initial_width=>bergs%initial_width_s(k); initial_length=>bergs%initial_length_s(k)
@@ -6421,7 +6421,7 @@ subroutine calve_icebergs(bergs)
           ddt=ddt-bergs%dt*2./17. ! Minor offset to start day (negative offsets)
           icnt=icnt+1
           bergs%nbergs_calved=bergs%nbergs_calved+1
-          if (grd%lat(i,j)<0.) then
+          if (grd%lat(i,j)<bergs%ns_trans_lat) then
             bergs%nbergs_calved_by_class_s(k)=bergs%nbergs_calved_by_class_s(k)+1
           else
             bergs%nbergs_calved_by_class_n(k)=bergs%nbergs_calved_by_class_n(k)+1

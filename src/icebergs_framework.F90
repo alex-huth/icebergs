@@ -55,6 +55,7 @@ logical :: save_bond_forces=.true. !< Saves forces on bonds so only 1 of 2 bonds
 logical :: short_step_mts_grounding=.false.
 logical :: radius_based_drag=.false. !if T, hex bergs, and dem, 2r is used as the area of the vert face for drag/wave forces
 logical :: A68_test=.false. !< If True, enforces grounding zone in the A68 test case (Huth et al., 2022)
+logical :: PIG_test=.false. !< If True, adds wind velocity where masked in SIS
 real :: A68_xdisp=0. !< longitude of the SW corner of the grounding zone in the A68 test case
 real :: A68_ydisp=0. !< latitude of the SW corner of the grounding zone in the A68 test case
 logical :: rev_mind=.false. !< Alterate option for staggering the 3x3 cells used for quadratic mapping of ocean depth to particles
@@ -64,6 +65,7 @@ logical :: skip_first_outer_mts_step=.false.
 logical :: no_frac_first_ts=.false.
 logical :: footloose=.false. !< Turn footloose calving on/off
 logical :: use_berg_origin_basins=.false. !< If T, save berg melt associated with the each ice-sheet basin of origin for the bergs
+real :: rho_seawater=1025. !< Density of ocean [kg/m^3]
 
 !Public params !Niki: write a subroutine to expose these
 public nclasses,buffer_width,buffer_width_traj,buffer_width_bond_traj
@@ -73,8 +75,8 @@ public orig_read, force_all_pes_traj
 public mts,save_bond_traj,ewsame,iceberg_bonds_on
 public dem, save_bond_forces, orig_dem_moment_of_inertia, tabular_calving_global
 public short_step_mts_grounding, radius_based_drag
-public A68_test, A68_xdisp, A68_ydisp
-public footloose, use_berg_origin_basins
+public A68_test, A68_xdisp, A68_ydisp, PIG_test
+public footloose, use_berg_origin_basins, rho_seawater
 
 !Public types
 public icebergs_gridded, xyt, iceberg, icebergs, buffer, bond, bond_xyt, tabular_calving_state
@@ -154,7 +156,8 @@ type :: icebergs_gridded
   real, dimension(:,:), pointer :: latc=>null() !< Latitude of cell centers (degree N)
   real, dimension(:,:), pointer :: dx=>null() !< Length of cell edge (m)
   real, dimension(:,:), pointer :: dy=>null() !< Length of cell edge (m)
-  real, dimension(:,:), pointer :: area=>null() !< Area of cell (m^2)
+  real, dimension(:,:), pointer :: area_um=>null() !< Unmasked area of cell (m^2)
+  real, dimension(:,:), pointer :: area=>null() !< Masked area of cell (m^2)
   real, dimension(:,:), pointer :: msk=>null() !< Ocean-land mask (1=ocean)
   real, dimension(:,:), pointer :: cos=>null() !< Cosine from rotation matrix to lat-lon coords
   real, dimension(:,:), pointer :: sin=>null() !< Sine from rotation matrix to lat-lon coords
@@ -781,7 +784,8 @@ real :: traj_sample_hrs=24. ! Period between sampling of position for trajectory
 real :: traj_write_hrs=480. ! Period between writing sampled trajectories to disk
 real :: verbose_hrs=24. ! Period between verbose messages
 integer :: max_bonds=6 ! Maximum number of iceberg bond passed between processors
-real :: rho_bergs=850. ! Density of icebergs
+real :: rho_bergs=850. ! Density of icebergs [kg/m^3]
+real :: rho_seawater=1025. !< Density of ocean [kg/m^3]
 real :: spring_coef=1.e-8 ! Spring constant for iceberg interactions (this seems to be the highest stable value)
 real :: contact_spring_coef=0. !Spring coef for berg collisions (is set to spring_coef if not specified)
 real :: cdrag_grounding=0.0 ! Drag coefficient against ocean bottom
@@ -956,11 +960,12 @@ namelist /icebergs_nml/ verbose, budget, halo,  traj_sample_hrs, initial_mass, t
          initial_mass_n, distribution_n, mass_scaling_n, initial_thickness_n, ns_trans_lat,&
          fl_youngs, fl_strength,  save_all_traj_year, save_nonfl_traj_by_class,&
          save_traj_by_class_start_mass_thres_n, save_traj_by_class_start_mass_thres_s,traj_area_thres_sntbc,&
-         traj_area_thres_fl,tau_is_velocity, ocean_drag_scale, A68_test, &
+         traj_area_thres_fl,tau_is_velocity, ocean_drag_scale, A68_test, rho_seawater, &
          A68_xdisp,A68_ydisp,use_broken_bonds_for_substep_contact,print_fracture,calculate_spring_from_dem_spring,&
          orig_dem_moment_of_inertia, break_bonds_on_sub_steps, skip_first_outer_mts_step, rev_mind, &
          no_frac_first_ts, use_grounding_torque, short_step_mts_grounding, radius_based_drag, save_bond_forces, &
-         shelf_to_tabular_hours, remove_tabular_outer_bonds_when_calve, VK, ZETA_N, RC, buoy_flux_itt_threshold
+         shelf_to_tabular_hours, remove_tabular_outer_bonds_when_calve, VK, ZETA_N, RC, buoy_flux_itt_threshold, &
+         PIG_test
 
 ! Local variables
 integer :: ierr, iunit, i, j, id_class, axes3d(3), axes3d_b(3), is,ie,js,je,np
@@ -1063,6 +1068,7 @@ real :: dx,dy,dx_dlon,dy_dlat,lat_ref2,lon_ref
   allocate( grd%latc(grd%isd:grd%ied, grd%jsd:grd%jed) );grd%lat(:,:)=big_number
   allocate( grd%dx(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%dx(:,:)=0.
   allocate( grd%dy(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%dy(:,:)=0.
+  allocate( grd%area_um(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%area_um(:,:)=0.
   allocate( grd%area(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%area(:,:)=0.
   allocate( grd%msk(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%msk(:,:)=0.
   allocate( grd%cos(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%cos(:,:)=1.
@@ -1135,7 +1141,7 @@ real :: dx,dy,dx_dlon,dy_dlat,lat_ref2,lon_ref
   is=grd%isc; ie=grd%iec; js=grd%jsc; je=grd%jec
   grd%lon(is:ie,js:je)=ice_lon(:,:)
   grd%lat(is:ie,js:je)=ice_lat(:,:)
-  grd%area(is:ie,js:je)=ice_area(:,:) !sis2 has *(4.*pi*radius*radius)
+  grd%area_um(is:ie,js:je)=ice_area(:,:) !sis2 has *(4.*pi*radius*radius)
 
   !!!!!!!!!!!!!!!debugging!!!!!!!!!!!!!!!!!!
   !if (mpp_pe().eq.5) then
@@ -1156,7 +1162,7 @@ real :: dx,dy,dx_dlon,dy_dlat,lat_ref2,lon_ref
 
   !For SIS not to change answers
   if(present(fractional_area)) then
-    if(fractional_area) grd%area(is:ie,js:je)=ice_area(:,:) *(4.*pi*radius*radius)
+    if(fractional_area) grd%area_um(is:ie,js:je)=ice_area(:,:) *(4.*pi*radius*radius)
   endif
   if(present(ocean_depth)) grd%ocean_depth(is:ie,js:je)=ocean_depth(:,:)
   !if(present(ocean_depth)) grd%ocean_depth(grd%isd:grd%ied,grd%jsd:grd%jed)=ocean_depth(:,:)
@@ -1169,9 +1175,12 @@ real :: dx,dy,dx_dlon,dy_dlat,lat_ref2,lon_ref
   grd%cos(is:ie,js:je)=cos_rot(:,:)
   grd%sin(is:ie,js:je)=sin_rot(:,:)
 
+  grd%area(is:ie,js:je)=grd%area_um(is:ie,js:je)!*grd%msk(is:ie,js:je)
+
   call mpp_update_domains(grd%lon, grd%domain, position=CORNER)
   call mpp_update_domains(grd%lat, grd%domain, position=CORNER)
   call mpp_update_domains(grd%dy, grd%dx, grd%domain, gridtype=CGRID_NE, flags=SCALAR_PAIR)
+  call mpp_update_domains(grd%area_um, grd%domain)
   call mpp_update_domains(grd%area, grd%domain)
   call mpp_update_domains(grd%msk, grd%domain)
   call mpp_update_domains(grd%cos, grd%domain, position=CORNER)

@@ -13,7 +13,7 @@ use ice_bergs_framework, only : spread_variable_across_cells, sum_up_spread_fiel
 use ice_bergs_framework, only : hexagon_into_quadrants_using_triangles, Rearth
 use ice_bergs_framework, only : square_into_quadrants_using_triangles
 use ice_bergs_framework, only : initialize_iceberg_bonds, count_bonds
-use ice_bergs_framework, only : find_cell, pos_within_cell, generate_id
+use ice_bergs_framework, only : find_cell, pos_within_cell, generate_id, rho_seawater
 use ice_bergs_framework, only : debug, footloose, connect_all_bonds, delete_all_bonds
 use ice_bergs_framework, only : update_halo_calved_tabular_icebergs, assign_n_bonds,transfer_mts_bergs
 use fms_mod, only : error_mesg, FATAL, WARNING, stderr
@@ -704,7 +704,7 @@ subroutine ice_shelf_to_bonded_bergs(bergs, TC)
               !each particle with neighboring cells. Their thickness and scaling
               !will be determined below in new_tabular_bergs_thickness_and_pressure.
               call begin_calving_tabular_iceberg_from_shelf(bergs, grd, lon, lat, &
-                                                            TC%calve_mask, TC%frac_shelf, 0.5*diameter)
+                                                            TC%calve_mask, TC%frac_shelf, TC%h_shelf, 0.5*diameter)
             endif
             lon=lon+dlon
           enddo
@@ -713,6 +713,8 @@ subroutine ice_shelf_to_bonded_bergs(bergs, TC)
       enddo
     enddo
   endif !if bcount>0
+
+  call mpp_update_domains(grd%area, grd%domain)
 
   !2) Initialize bonds and halo bergs. Eliminate bergs with zero thickness and which are 2 cells away from
   !the ice front. The particles within 2 cells of the front are kept for now, even if they currently have zero
@@ -965,7 +967,7 @@ subroutine new_tabular_bergs_thickness_and_pressure(bergs)
       !If you wanted to use partially-masked cells, you would need to make sure the mask is retained until the particles
       !are released, and then multiply resid_area by the mask for each cell. But simpler for now to only initialize particles
       !that overlap a fully-masked cells.
-      resid_area = frac_shelf(grdi,grdj) * grd%area(grdi,grdj)
+      resid_area = frac_shelf(grdi,grdj) * grd%area_um(grdi,grdj)
       do count=1,max_count
         if (pf_area(grdi,grdj,count)>0) then
           if (pf_area(grdi,grdj,count)<resid_area) then
@@ -1203,10 +1205,10 @@ subroutine new_tabular_bergs_thickness_and_pressure(bergs)
 end subroutine new_tabular_bergs_thickness_and_pressure
 
 !> Initialize (begin calving) a tabular iceberg particle from an ice shelf at the given lat/lon coordinates.
-!! Save its overlapping area withvneighboring cells, which will be used to determine its
+!! Save its overlapping area with neighboring cells, which will be used to determine its
 !! thickness, mass, and mass scaling in subroutine new_tabular_berg_thickness_and_pressure
 !! Interpolation of external fields to the new particle will occur after the berg is released and no longer static
-subroutine begin_calving_tabular_iceberg_from_shelf(bergs, grd, lon, lat, calve_mask, frac_shelf, radius)
+subroutine begin_calving_tabular_iceberg_from_shelf(bergs, grd, lon, lat, calve_mask, frac_shelf, h_shelf, radius)
   ! Arguments
   type(icebergs), pointer :: bergs !< Container for all types and memory
   type(icebergs_gridded), pointer :: grd
@@ -1215,6 +1217,7 @@ subroutine begin_calving_tabular_iceberg_from_shelf(bergs, grd, lon, lat, calve_
   real, dimension(grd%isd:grd%ied,grd%jsd:grd%jed), intent(in) :: calve_mask !< ice shelf calving mask
   real, dimension(grd%isd:grd%ied,grd%jsd:grd%jed), intent(in) :: frac_shelf !< The fraction of a grid cell covered by
                                                                              !! the ice shelf [nondim].
+  real, dimension(grd%isd:grd%ied,grd%jsd:grd%jed), intent(in) :: h_shelf !< The ice shelf thickness field (m)
   real :: radius !< radius of the new iceberg
   ! Local variables
   integer :: i,j,k,icnt,icntmax
@@ -1234,6 +1237,7 @@ subroutine begin_calving_tabular_iceberg_from_shelf(bergs, grd, lon, lat, calve_
   real, pointer :: yUxL_overlap, yUxC_overlap, yUxR_overlap
   real, pointer :: yCxL_overlap, yCxC_overlap, yCxR_overlap
   real, pointer :: yDxL_overlap, yDxC_overlap, yDxR_overlap
+  ! real, parameter :: rho_seawater=1035.
 
   ! Get the stderr unit number
   stderrunit = stderr()
@@ -1267,6 +1271,9 @@ subroutine begin_calving_tabular_iceberg_from_shelf(bergs, grd, lon, lat, calve_
   !Ignore bergs on the N and E boundary of the PE, as they will be included in the PEs to the N or E, respectively
   !But the find_cell call should not allow bergs to be found on these boundaries, anyway.
   if ((i==grd%iec .and. xi==1) .or. (j==grd%jec .and. yj==1)) return
+
+  !Do not calve from grounded cells?
+  ! if ((bergs%rho_bergs/rho_seawater)*h_shelf(i,j)>grd%ocean_depth(i,j)) return
 
   ! if (grd%msk(i,j)<0.5) then
   !   write(stderrunit,*) 'KID, calve_icebergs: WARNING!!! Iceberg born in land cell',i,j,newberg%lon,newberg%lat
@@ -1303,6 +1310,8 @@ subroutine begin_calving_tabular_iceberg_from_shelf(bergs, grd, lon, lat, calve_
            (yCxL*calve_mask(i-c1,j   ) + yCxR*calve_mask(i+c1,j   )))
 
   if (pmask<=0) return
+
+  grd%area(i,j)=grd%area_um(i,j)
 
   cm_arr(1,1)=calve_mask(i-c1,j-c1); cm_arr(1,2)=calve_mask(i-c1,j); cm_arr(1,3)=calve_mask(i-c1,j+c1)
   cm_arr(2,1)=calve_mask(i   ,j-c1); cm_arr(2,2)=calve_mask(i   ,j); cm_arr(2,3)=calve_mask(i   ,j+c1)
@@ -1513,7 +1522,7 @@ subroutine calving_tabular_particle_grid_overlap(bergs, Area, i, j, x, y, &
   real :: Area_Q1,Area_Q2 , Area_Q3,Area_Q4, Area_hex, Area_square
   real :: tol, orientation
   real :: Dn, Hocean
-  real, parameter :: rho_seawater=1035.
+  ! real, parameter :: rho_seawater=1035.
   integer :: stderrunit
   logical :: zero_fill
 
@@ -1532,8 +1541,8 @@ subroutine calving_tabular_particle_grid_overlap(bergs, Area, i, j, x, y, &
   if (.not. bergs%hexagonal_icebergs) then ! Treat icebergs as squares during spreading to cells, rectangles during thermodynamics
 
     ! L is the non dimensional length of the iceberg [ L=(Area of berg/ Area of grid cell)^0.5 ].
-    if (grd%area(i,j)>0) then
-      L=min( sqrt(Area / grd%area(i,j)),1.0)
+    if (grd%area_um(i,j)>0) then
+      L=min( sqrt(Area / grd%area_um(i,j)),1.0)
     else
       L=1.
     endif
@@ -1613,9 +1622,9 @@ subroutine calving_tabular_particle_grid_overlap(bergs, Area, i, j, x, y, &
     endif
   else ! hexagonal
 
-    if (grd%area(i,j)>0) then
+    if (grd%area_um(i,j)>0) then
       ! Non-dimensionalize element length by grid area. (This gives the non-dim Apothem of the hexagon)
-      H=min(( (sqrt(Area/(2.*sqrt(3.))) / sqrt(grd%area(i,j)))),1.)
+      H=min(( (sqrt(Area/(2.*sqrt(3.))) / sqrt(grd%area_um(i,j)))),1.)
     else
       ! Largest allowable H, since this makes S=0.49, and S has to be less than 0.5
       H=(sqrt(3.)/2)*(0.49)

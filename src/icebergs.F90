@@ -50,7 +50,7 @@ use ice_bergs_framework, only: dem_tests_init
 use ice_bergs_framework, only: dem, save_bond_forces
 use ice_bergs_framework, only: footloose
 use ice_bergs_framework, only: orig_dem_moment_of_inertia, no_frac_first_ts
-use ice_bergs_framework, only: A68_test, A68_xdisp, A68_ydisp
+use ice_bergs_framework, only: A68_test, A68_xdisp, A68_ydisp, PIG_test
 use ice_bergs_framework, only: set_constant_interaction_length_and_width, skip_first_outer_mts_step
 use ice_bergs_framework, only: break_bonds_on_sub_steps, initialize_iceberg_bonds
 use ice_bergs_framework, only: short_step_mts_grounding, radius_based_drag
@@ -59,7 +59,7 @@ use ice_bergs_framework, only: square_into_quadrants_using_triangles
 use ice_bergs_framework, only: sum_up_spread_fields, sum_up_spread_fields, Area_of_triangle
 use ice_bergs_framework, only: point_in_triangle, point_in_interval, point_is_on_the_line
 use ice_bergs_framework, only: convert_from_grid_to_meters, convert_from_meters_to_grid
-use ice_bergs_framework, only: spread_variable_across_cells, find_orientation_using_iceberg_bonds
+use ice_bergs_framework, only: spread_variable_across_cells, find_orientation_using_iceberg_bonds, rho_seawater
 
 use ice_bergs_io,        only: ice_bergs_io_init, write_restart_bergs, write_trajectory, write_bond_trajectory
 use ice_bergs_io,        only: read_restart_bergs, read_restart_calving
@@ -81,7 +81,7 @@ real, parameter :: r180_pi=180./pi !< Converts radians to degrees
 real, parameter :: rho_ice=916.7 !< Density of fresh ice @ 0oC (kg/m^3)
 real, parameter :: rho_water=999.8 !< Density of fresh water @ 0oC (kg/m^3)
 real, parameter :: rho_air=1.1 !< Density of air @ 0oC (kg/m^3)
-real, parameter :: rho_seawater=1025. !< Approx. density of surface sea water @ 0oC (kg/m^3)
+! real, parameter :: rho_seawater=1025. !< Approx. density of surface sea water @ 0oC (kg/m^3)
 real, parameter :: gravity=9.8 !< Gravitational acceleratio (m/s^2)
 real, parameter :: Cd_av=1.3 !< (Vertical) Drag coefficient between bergs and atmos
 real, parameter :: Cd_ah=0.0055 !< (Horizontal) Drag coefficient between bergs and atmos
@@ -2777,10 +2777,13 @@ subroutine thermodynamics(bergs)
   real :: dMb_fl, dMv_fl, dMe_fl, dMe_l, dMv_l
   real :: Mbits_fl, dMbitsE_fl, nMbits_fl, Lbits_fl, Abits_fl, Mbb_fl, dMbitsM_fl
   real :: prev_mass_of_fl_bits, prev_mass_of_fl_bergy_bits, M_edit, Mscale_edit,l_b3,fb, kd
-  real, parameter :: l_c=pi/(2.*sqrt(2.)),lw_c = 1./(gravity*rho_seawater),B_c=1./(12.*(1.-0.3**2.))
+  real, parameter :: l_c=pi/(2.*sqrt(2.)), B_c=1./(12.*(1.-0.3**2.))
+  real :: lw_c
 
   ! For convenience
   grd=>bergs%grd
+
+  lw_c = 1./(gravity*rho_seawater)
 
   !Initializing
   grd%Uvel_on_ocean(:,:,:)=0.
@@ -3304,10 +3307,11 @@ subroutine fl_bits_dimensions(bergs,this,L_fl,W_fl,T_fl)
   real :: W_fl !< Footloose berg bits width
   real :: T_fl !< Footloose berg bits thickness
   ! Local variables
-  real,parameter :: l_c=pi/(2.*sqrt(2.)), lw_c = 1./(gravity*rho_seawater)
+  real,parameter :: l_c=pi/(2.*sqrt(2.))
   real,parameter :: B_c=1./(12.*(1.-0.3**2.)) !poisson=0.3
-  real :: l_w,l_b
+  real :: lw_c,l_w,l_b
 
+  lw_c = 1./(gravity*rho_seawater)
   l_w  = (lw_c*bergs%fl_youngs*B_c*(this%thickness**3.))**0.25  !buoyancy length
   l_b  = l_c*l_w !length of a freshly calved footloose child berg
   L_fl = 3.*l_b; W_fl = l_b
@@ -3783,7 +3787,7 @@ subroutine spread_mass_across_ocean_cells(bergs, berg, i, j, x, y, Mberg, Mbits,
   real :: I_fraction_used !Inverse of fraction used
   real :: tol
   real :: Dn, Hocean
-  real, parameter :: rho_seawater=1035.
+  ! real, parameter :: rho_seawater=1035.
   integer :: stderrunit
   logical :: debug
   real :: orientation, Mass_berg
@@ -3821,7 +3825,7 @@ subroutine spread_mass_across_ocean_cells(bergs, berg, i, j, x, y, Mberg, Mbits,
   Mass=(Mass_berg+Mbits+Mbits_fl)*scaling
   ! This line attempts to "clip" the weight felt by the ocean. The concept of
   ! clipping is non-physical and this step should be replaced by grounding.
-  if (grd%clipping_depth>0.) Mass=min(Mass,grd%clipping_depth*grd%area(i,j)*rho_seawater)
+  if (grd%clipping_depth>0.) Mass=min(Mass,grd%clipping_depth*grd%area_um(i,j)*rho_seawater)
 
   !Initialize weights for each cell
   yDxL=0.  ; yDxC=0. ; yDxR=0. ; yCxL=0. ; yCxR=0.
@@ -3831,8 +3835,8 @@ subroutine spread_mass_across_ocean_cells(bergs, berg, i, j, x, y, Mberg, Mbits,
                                            ! and squares during spreading to cells
 
     ! L is the non dimensional length of the iceberg [ L=(Area of berg/ Area of grid cell)^0.5 ] or something like that.
-    if (grd%area(i,j)>0) then
-      L=min( sqrt(Area / grd%area(i,j)),1.0)
+    if (grd%area_um(i,j)>0) then
+      L=min( sqrt(Area / grd%area_um(i,j)),1.0)
     else
       L=1.
     endif
@@ -3959,8 +3963,8 @@ subroutine spread_mass_across_ocean_cells(bergs, berg, i, j, x, y, Mberg, Mbits,
       endif
     endif
 
-    if (grd%area(i,j)>0) then
-      H=min(( (sqrt(Area/(2.*sqrt(3.))) / sqrt(grd%area(i,j)))),1.) ! Non-dimensionalize element length by grid area. (This gives the non-dim Apothem of the hexagon)
+    if (grd%area_um(i,j)>0) then
+      H=min(( (sqrt(Area/(2.*sqrt(3.))) / sqrt(grd%area_um(i,j)))),1.) ! Non-dimensionalize element length by grid area. (This gives the non-dim Apothem of the hexagon)
     else
       H=(sqrt(3.)/2)*(0.49) ! Largest allowable H, since this makes S=0.49, and S has to be less than 0.5 (Not sure what the implications of this are)
     endif
@@ -4471,7 +4475,7 @@ end subroutine calculate_sum_over_bergs_diagnositcs
 !> The main driver the steps updates icebergs
 subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh, sst, calving_hflx, cn, hi, &
                         stagger, stress_stagger, sss, mass_berg, ustar_berg, area_berg, &
-                        calve_mask, mass_shelf, area_shelf, frac_cberg, frac_cberg_calved)
+                        calve_mask, mass_shelf, frac_shelf, frac_cberg, frac_cberg_calved)
   ! Arguments
   type(icebergs), pointer :: bergs !< Container for all types and memory
   type(time_type), intent(in) :: time !< Model time
@@ -4495,8 +4499,8 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   real, dimension(:,:), optional, pointer :: area_berg !< Area of bergs (m2)
   real, dimension(:,:), optional, pointer, intent(in)  :: calve_mask        !< Mask for calving of tabular bonded bergs
   real, dimension(:,:), optional, pointer, intent(in)  :: mass_shelf        !< The ice shelf mass/ice shelf area (kg m-2)
-  real, dimension(:,:), optional, pointer, intent(in)  :: area_shelf        !< The area of each grid cell covered by
-                                                                            !! the ice shelf [m2]
+  real, dimension(:,:), optional, pointer, intent(in)  :: frac_shelf        !< The fraction of each grid cell covered by
+                                                                            !! the ice shelf [nondim]
   real, dimension(:,:), optional, pointer :: frac_cberg        !< Cell fraction of partially-calved bonded bergs from
                                                                             !! the ice sheet [nondim]
   real, dimension(:,:), optional, pointer :: frac_cberg_calved !< Cell fraction of fully-calved bonded bergs from
@@ -4583,27 +4587,41 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
 
   ! Initialize fields needed for tabular calving of bonded bergs from ice shelves
   if (bergs%tabular_calving) then
-    if (.not. (present(calve_mask) .and. present(mass_shelf) .and. present(area_shelf) &
+    if (.not. (present(calve_mask) .and. present(mass_shelf) .and. present(frac_shelf) &
                .and. present(frac_cberg_calved) .and. present(frac_cberg) )) then
       call error_mesg('KID, icebergs_run', 'Not all tabular calving variables are not present!', FATAL)
     else
-      if (.not. (associated(calve_mask) .and. associated(mass_shelf) .and. associated(area_shelf) &
+      if (.not. (associated(calve_mask) .and. associated(mass_shelf) .and. associated(frac_shelf) &
           .and. associated(frac_cberg_calved) .and. associated(frac_cberg) )) then
         write(stderrunit,*) 'KID, icebergs_run', 'associated: calve_mask ', associated(calve_mask), &
-          ', mass_shelf ',associated(mass_shelf),', area_shelf ',associated(area_shelf),&
+          ', mass_shelf ',associated(mass_shelf),', frac_shelf ',associated(frac_shelf),&
           ', frac_cberg_calved ',associated(frac_cberg_calved),', frac_cberg ',associated(frac_cberg)
         call error_mesg('KID, icebergs_run', 'Not all tabular calving variables are associated!', FATAL)
       endif
       TC=>bergs%TC
       TC%calve_mask(grd%isc:grd%iec,grd%jsc:grd%jec) = calve_mask(:,:)
+
+      where(TC%calve_mask(grd%isc:grd%iec,grd%jsc:grd%jec)>0) &
+        grd%area(grd%isc:grd%iec,grd%jsc:grd%jec)=grd%area_um(grd%isc:grd%iec,grd%jsc:grd%jec)
       !TC%h_shelf is the ice shelf thickness as calculated from ice shelf mass, but using iceberg density
       !If ice shelf and iceberg density differ, TC%h_shelf will still produce the same basal elevation
       !(assuming floatation) as  ice shelf thickness calculated using ice shelf density. However, the
       !respective surface elevations may differ.
-      TC%frac_shelf(grd%isc:grd%iec,grd%jsc:grd%jec) = area_shelf(:,:)/grd%area(grd%isc:grd%iec,grd%jsc:grd%jec)
+
+      TC%frac_shelf(grd%isc:grd%iec,grd%jsc:grd%jec) = frac_shelf(:,:)
+
+      if (any(frac_shelf>1.0)) call error_mesg('KID, iceberg_run', 'frac_shelf>1!', FATAL)
 
       !Recall that mass_shelf is in units kg per m2 of ice shelf area
       TC%h_shelf(grd%isc:grd%iec,grd%jsc:grd%jec) = mass_shelf(:,:) / bergs%rho_bergs
+
+!!$      !Wherever there is ice sheet that is not calving, the mask and area should be zero
+!!$      !This accounts for ice-front advection
+!!$      ! where(TC%frac_shelf(grd%isc:grd%iec,grd%jsc:grd%jec)>0 .and. &
+!!$      !   TC%calve_mask(grd%isc:grd%iec,grd%jsc:grd%jec)==0)
+!!$      !   grd%area(grd%isc:grd%iec,grd%jsc:grd%jec)=0.
+!!$      !   grd%msk(grd%isc:grd%iec,grd%jsc:grd%jec)=0.
+!!$      ! end where
 
       !correct h_shelf so that it is zero (rather than NaN) where there is no ice shelf
       do j=grd%jsc,grd%jec ; do i=grd%isc,grd%iec
@@ -4622,6 +4640,7 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
             do while (associated(berg))
               if (berg%static_berg==0.) then
                 grd%msk(i,j)=1
+                grd%area(i,j)=grd%area_um(i,j)
                 berg=>NULL()
               else
                 berg=>berg%next
@@ -4631,6 +4650,7 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
         endif
       enddo; enddo
 
+      call mpp_update_domains(grd%area, grd%domain, complete=.false.)
       call mpp_update_domains(TC%calve_mask, grd%domain, complete=.false.)
       call mpp_update_domains(TC%h_shelf, grd%domain, complete=.false.)
       call mpp_update_domains(TC%frac_shelf, grd%domain, complete=.false.)
@@ -4809,6 +4829,13 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   if (.not. bergs%tau_is_velocity) then
     call invert_tau_for_du(grd%ua, grd%va) ! Note rough conversion from stress to speed
   endif
+
+  if (PIG_test) then
+    do I=grd%isc-1,grd%iec ; do J=grd%jsc-1,grd%jec
+      if (grd%ua(I,J)==0 .and. grd%va(I,J)==0) grd%ua(I,J)=-9.0
+    enddo; enddo
+  endif
+
  !grd%ua(grd%isc:grd%iec,grd%jsc:grd%jec)=sign(sqrt(abs(tauxa(:,:))/0.01),tauxa(:,:))  ! Note rough conversion from stress to speed
  !grd%va(grd%isc:grd%iec,grd%jsc:grd%jec)=sign(sqrt(abs(tauya(:,:))/0.01),tauya(:,:))  ! Note rough conversion from stress to speed
   call mpp_update_domains(grd%ua, grd%va, grd%domain, gridtype=BGRID_NE, complete=.true.)
@@ -4819,7 +4846,7 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
     !We might need to make sure spread_mass is defined on halos (or this might be done automatically. I need to look into this)
     do i=grd%isd,grd%ied ; do j=grd%jsd,grd%jed
       if (grd%area(i,j)>0) then
-        grd%ssh(i,j) =   ((grd%spread_mass(i,j)/grd%area(i,j))*(bergs%rho_bergs/rho_seawater))  !Is this an appropriate sea water density to use? Should be freezing point.
+        grd%ssh(i,j) =   ((grd%spread_mass(i,j)/grd%area_um(i,j))*(bergs%rho_bergs/rho_seawater))  !Is this an appropriate sea water density to use? Should be freezing point.
       endif
     enddo ;enddo
   endif

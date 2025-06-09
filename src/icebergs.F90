@@ -4109,6 +4109,9 @@ subroutine interp_gridded_fields_to_bergs(bergs)
         if (bergs%tabular_calving) grd%msk(grdi,grdj)=1 !berg%mask_status=grd%msk(grdi,grdj)
         call interp_flds(grd, berg%lon, berg%lat, berg%ine, berg%jne, berg%xi, berg%yj, rx, ry, berg%uo, berg%vo, &
           berg%ui, berg%vi, berg%ua, berg%va, berg%ssh_x, berg%ssh_y, berg%sst, berg%sss, berg%cn, berg%hi, berg%od)
+        if (PIG_test) then
+          if (grd%orig_msk(grdi,grdj) /= grd%msk(grdi,grdj)) berg%ua=-6.0
+        endif
       endif
       berg=>berg%next
     enddo
@@ -4627,7 +4630,7 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
       do j=grd%jsc,grd%jec ; do i=grd%isc,grd%iec
         if (TC%frac_shelf(i,j)<=0) TC%h_shelf(i,j) = 0.0
         if (TC%frac_shelf(i,j)>0) then
-          grd%msk(i,j)=0
+          grd%msk(i,j)=0 !1-TC%frac_shelf(i,j)
         else
           grd%msk(i,j)=1
         endif
@@ -4828,12 +4831,6 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
 
   if (.not. bergs%tau_is_velocity) then
     call invert_tau_for_du(grd%ua, grd%va) ! Note rough conversion from stress to speed
-  endif
-
-  if (PIG_test) then
-    do I=grd%isc-1,grd%iec ; do J=grd%jsc-1,grd%jec
-      if (grd%ua(I,J)==0 .and. grd%va(I,J)==0) grd%ua(I,J)=-9.0
-    enddo; enddo
   endif
 
  !grd%ua(grd%isc:grd%iec,grd%jsc:grd%jec)=sign(sqrt(abs(tauxa(:,:))/0.01),tauxa(:,:))  ! Note rough conversion from stress to speed

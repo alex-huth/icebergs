@@ -1184,6 +1184,8 @@ subroutine new_tabular_bergs_thickness_and_pressure(bergs)
     !Immediately adjust the iceberg mask to account for fully-calved icebergs
     !Even if the cell is still partially-full of ice shelf after calving, we still unmask it, as any neighboring masked cell
     !will push bergs away using the coastal_drift and tidal_drift features
+    ! if (frac_cberg_calved(grdi,grdj)>0) &
+    !    grd%msk(grdi,grdj)=1.0-max(frac_shelf(grdi,grdj) - frac_cberg_calved(grdi,grdj),0.)
     if (frac_cberg_calved(grdi,grdj)>0) grd%msk(grdi,grdj)=1.
   enddo; enddo
   call mpp_update_domains(frac_cberg_calved, grd%domain, complete=.false.)

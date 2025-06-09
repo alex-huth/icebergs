@@ -159,6 +159,7 @@ type :: icebergs_gridded
   real, dimension(:,:), pointer :: area_um=>null() !< Unmasked area of cell (m^2)
   real, dimension(:,:), pointer :: area=>null() !< Masked area of cell (m^2)
   real, dimension(:,:), pointer :: msk=>null() !< Ocean-land mask (1=ocean)
+  real, dimension(:,:), pointer :: orig_msk=>null() !< Original ocean-land mask (1=ocean)
   real, dimension(:,:), pointer :: cos=>null() !< Cosine from rotation matrix to lat-lon coords
   real, dimension(:,:), pointer :: sin=>null() !< Sine from rotation matrix to lat-lon coords
   real, dimension(:,:), pointer :: ocean_depth=>NULL() !< Depth of ocean (m)
@@ -1071,6 +1072,7 @@ real :: dx,dy,dx_dlon,dy_dlat,lat_ref2,lon_ref
   allocate( grd%area_um(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%area_um(:,:)=0.
   allocate( grd%area(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%area(:,:)=0.
   allocate( grd%msk(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%msk(:,:)=0.
+  allocate( grd%orig_msk(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%orig_msk(:,:)=0.
   allocate( grd%cos(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%cos(:,:)=1.
   allocate( grd%sin(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%sin(:,:)=0.
   allocate( grd%ocean_depth(grd%isd:grd%ied, grd%jsd:grd%jed) ); grd%ocean_depth(:,:)=0.
@@ -1187,6 +1189,8 @@ real :: dx,dy,dx_dlon,dy_dlat,lat_ref2,lon_ref
   call mpp_update_domains(grd%sin, grd%domain, position=CORNER)
   call mpp_update_domains(grd%ocean_depth, grd%domain)
   call mpp_update_domains(grd%parity_x, grd%parity_y, grd%domain, gridtype=AGRID) ! If either parity_x/y is -ve, we need rotation of vectors
+
+  grd%orig_msk=grd%msk
 
   ! Sanitize lon and lat in the southern halo
   do j=grd%jsc-1,grd%jsd,-1; do i=grd%isd,grd%ied

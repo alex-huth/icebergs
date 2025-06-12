@@ -844,6 +844,7 @@ character(len=1), dimension(1) :: dim_names_1d
      endif
      if (tabular_calving_global) then
        allocate(localberg%mask_status)
+       allocate(mask_status(nbergs_in_file))
      endif
 
      call register_restart_field(fileobj,'lon',lon,dim_names_1d)
@@ -992,7 +993,7 @@ character(len=1), dimension(1) :: dim_names_1d
        localberg%basin    =basin(k)
      endif
      if (tabular_calving_global) then
-       localberg%mask_status=grd%msk(ine(k),jne(k))
+       localberg%mask_status=mask_status(k) !grd%msk(ine(k),jne(k))
      endif
 
       if (really_debug) lres=is_point_in_cell(grd, localberg%lon, localberg%lat, localberg%ine, localberg%jne, explain=.true.)

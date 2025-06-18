@@ -4736,10 +4736,8 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
     ! Copy ocean and ice velocities. They are already on B-grid u-points.
     grd%uo(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1) = uo(:,:)
     grd%vo(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1) = vo(:,:)
-    call mpp_update_domains(grd%uo, grd%vo, grd%domain, gridtype=BGRID_NE, complete=.false.)
     grd%ui(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1) = ui(:,:)
     grd%vi(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1) = vi(:,:)
-    call mpp_update_domains(grd%ui, grd%vi, grd%domain, gridtype=BGRID_NE, complete=.true.)
   elseif (vel_stagger == CGRID_NE) then
     ! The u- and v- points will have different offsets with symmetric memory.
     Iu_off = (size(uo,1) - (grd%iec - grd%isc))/2 - grd%isc + 1

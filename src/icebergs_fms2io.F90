@@ -695,7 +695,6 @@ type(time_type), intent(in) :: Time !< Model time
 integer :: k, siz(4), nbergs_in_file, nbergs_read
 logical :: lres, found_restart, found, replace_iceberg_num
 logical :: explain
-real :: lon0, lon1, lat0, lat1
 real :: pos_is_good, pos_is_good_all_pe
 character(len=53) :: filename
 type(icebergs_gridded), pointer :: grd
@@ -909,12 +908,6 @@ character(len=1), dimension(1) :: dim_names_1d
   elseif (bergs%require_restart) then
      stop 'read_restart_bergs, RESTART NOT FOUND!'
   endif
-
-  ! Find approx outer bounds for tile
-  lon0=minval( grd%lon(grd%isc-1:grd%iec,grd%jsc-1:grd%jec) )
-  lon1=maxval( grd%lon(grd%isc-1:grd%iec,grd%jsc-1:grd%jec) )
-  lat0=minval( grd%lat(grd%isc-1:grd%iec,grd%jsc-1:grd%jec) )
-  lat1=maxval( grd%lat(grd%isc-1:grd%iec,grd%jsc-1:grd%jec) )
 
   do k=1, nbergs_in_file
     localberg%lon=lon(k)
@@ -1280,7 +1273,8 @@ integer :: all_pe_number_perfect_bonds_with_first_on_pe
 integer :: ine, jne
 logical :: search_data_domain
 real :: berg_found, berg_found_all_pe
-integer, allocatable, dimension(:) :: id_cnt, id_ij,    &
+integer, allocatable, dimension(:) :: first_id_cnt, first_id_ij,    &
+                                      other_id_cnt, other_id_ij,    &
                                       first_berg_jne,   &
                                       first_berg_ine,   &
                                       other_berg_jne,   &
@@ -1325,8 +1319,10 @@ character(len=1) :: dim_names_1d(1)
 
     allocate(first_id(nbonds_in_file))
     allocate(other_id(nbonds_in_file))
-    allocate(id_cnt(nbonds_in_file))
-    allocate(id_ij(nbonds_in_file))
+    allocate(first_id_cnt(nbonds_in_file))
+    allocate(first_id_ij(nbonds_in_file))
+    allocate(other_id_cnt(nbonds_in_file))
+    allocate(other_id_ij(nbonds_in_file))
     allocate(first_berg_jne(nbonds_in_file))
     allocate(first_berg_ine(nbonds_in_file))
     allocate(other_berg_ine(nbonds_in_file))
@@ -1341,17 +1337,10 @@ character(len=1) :: dim_names_1d(1)
       allocate(broken(nbonds_in_file))
     endif
     dim_names_1d = "i"
-    call register_restart_field(fileobj,'first_id_cnt',id_cnt,dim_names_1d)
-    call register_restart_field(fileobj,'first_id_ij',id_ij,dim_names_1d)
-    do k=1, nbonds_in_file
-      first_id(k) = id_from_2_ints( id_cnt(k), id_ij(k) )
-    enddo
-    call register_restart_field(fileobj,'other_id_cnt',id_cnt,dim_names_1d)
-    call register_restart_field(fileobj,'other_id_ij',id_ij,dim_names_1d)
-    do k=1, nbonds_in_file
-      other_id(k) = id_from_2_ints( id_cnt(k), id_ij(k) )
-    enddo
-    deallocate(id_cnt, id_ij)
+    call register_restart_field(fileobj,'first_id_cnt',first_id_cnt,dim_names_1d)
+    call register_restart_field(fileobj,'first_id_ij',first_id_ij,dim_names_1d)
+    call register_restart_field(fileobj,'other_id_cnt',other_id_cnt,dim_names_1d)
+    call register_restart_field(fileobj,'other_id_ij',other_id_ij,dim_names_1d)
     call register_restart_field(fileobj,'first_berg_jne',first_berg_jne,dim_names_1d)
     call register_restart_field(fileobj,'first_berg_ine',first_berg_ine,dim_names_1d)
     call register_restart_field(fileobj,'other_berg_jne',other_berg_jne,dim_names_1d)
@@ -1369,6 +1358,15 @@ character(len=1) :: dim_names_1d(1)
 
     call read_restart(fileobj)
     call close_file(fileobj)
+
+    do k=1, nbonds_in_file
+      first_id(k) = id_from_2_ints( first_id_cnt(k), first_id_ij(k) )
+      other_id(k) = id_from_2_ints( other_id_cnt(k), other_id_ij(k) )
+    enddo
+
+    deallocate(first_id_cnt, first_id_ij)
+    deallocate(other_id_cnt, other_id_ij)
+
     number_first_bonds_matched=0
     number_second_bonds_matched=0
     number_perfect_bonds=0

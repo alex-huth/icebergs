@@ -1937,9 +1937,9 @@ subroutine accel(bergs, berg, i, j, xi, yj, lat, uvel, vvel, uvel0, vvel0, dt, r
   ! !  call interp_flds(grd, berg%lon, berg%lat, i, j, xi, yj, rx, ry, uo, vo, ui, vi, ua, va, ssh_x, &
   ! !    ssh_y, sst, sss, cn, hi, od)
   ! !end if
+  if (bergs%tabular_calving) berg%mask_status=grd%msk(i,j)
 
   if (bergs%old_interp_flds_order) then
-    if (bergs%tabular_calving) berg%mask_status=grd%msk(i,j)
     call interp_flds(grd, berg%lon, berg%lat, i, j, xi, yj, rx, ry, uo, vo, ui, vi, ua, va, ssh_x, &
       ssh_y, sst, sss, cn, hi, od)
   else

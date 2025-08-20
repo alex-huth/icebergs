@@ -1063,8 +1063,8 @@ subroutine new_tabular_bergs_thickness_and_pressure(bergs)
           !(using the icebergs module "yearday" time convention), transition smoothly between:
           !  berg_scaling=0 for 0%   berg pressure on ocean and 100% ice shelf pressure
           !  berg_scaling=1 for 100% berg pressure on ocean and 0%   ice shelf pressure
-          T_scale = min(((bergs%current_year*367.+bergs%current_yearday)-&
-                         (berg%start_year*367.-berg%start_day))*24./bergs%shelf_to_tabular_hours, 1.0)
+          T_scale = min(((bergs%current_year*366.+bergs%current_yearday)-&
+                         (berg%start_year*366.+berg%start_day))*24./bergs%shelf_to_tabular_hours, 1.0)
 
           !Interpolate the T_scale to the grid to modify the ice shelf pressure felt on
           !the ocean. This interpolation accounts for the possibility of multiple tabular bergs with different

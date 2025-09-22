@@ -1413,8 +1413,8 @@ character(len=1) :: dim_names_1d(1)
        endif
 
       ! Decide whether the first iceberg is on the processeor
-      if ( (first_berg_ine(k)>=grd%isd) .and. (first_berg_ine(k)<=grd%ied) .and. &
-        (first_berg_jne(k)>=grd%jsd) .and. (first_berg_jne(k)<=grd%jed) ) then
+      if ( (first_berg_ine(k)>=grd%isc) .and. (first_berg_ine(k)<=grd%iec) .and. &
+        (first_berg_jne(k)>=grd%jsc) .and. (first_berg_jne(k)<=grd%jec) ) then
         number_first_bonds_matched=number_first_bonds_matched+1
 
         ! Search for the first berg, which the bond belongs to

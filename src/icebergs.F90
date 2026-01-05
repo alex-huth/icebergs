@@ -4859,8 +4859,8 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   else  ! The input sst is already in degrees Celsius.
     grd%sst(grd%isc:grd%iec,grd%jsc:grd%jec) = sst(:,:) ! Note no conversion necessary.
   endif
-  grd%cn(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)=cn(:,:)
-  grd%hi(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)=hi(:,:)
+  grd%cn(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)=cn(:,:) * grd%msk(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)
+  grd%hi(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)=hi(:,:) * grd%msk(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)
 
   ! Adding gridded salinity.
   if (present(sss)) then

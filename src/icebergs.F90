@@ -177,13 +177,16 @@ subroutine icebergs_init(bergs, &
   grd%melt_by_ice_sheet_basin(:,:,:)=0.
   call mpp_update_domains(bergs%grd%ocean_depth, bergs%grd%domain)
 
+  !to get all bonding right, have to update halos and bonds each a couple of times
   if (bergs%iceberg_bonds_on) then
     if (bergs%manually_initialize_bonds) then
       call initialize_iceberg_bonds(bergs)
     else
+      call update_halo_icebergs(bergs)
       call read_restart_bonds(bergs,Time)
     endif
-    call update_halo_icebergs(bergs)
+    call assign_n_bonds(bergs)
+    if (.not. bergs%mts) call update_halo_icebergs(bergs)
     if (bergs%manually_initialize_bonds) call initialize_iceberg_bonds(bergs)
     if (bergs%mts) then
       call transfer_mts_bergs(bergs)
@@ -193,7 +196,11 @@ subroutine icebergs_init(bergs, &
     endif
     nbonds=0
     check_bond_quality=.True.
-    call count_bonds(bergs, nbonds,check_bond_quality)
+    if (bergs%mts) then
+      !at least for sts-dem, you have to run this again...
+      call transfer_mts_bergs(bergs)
+    endif
+    call count_bonds(bergs, nbonds,check_bond_quality=check_bond_quality)
     call assign_n_bonds(bergs)
   endif
 
@@ -5414,7 +5421,7 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
     if (bergs%iceberg_bonds_on) then
       check_bond_quality=.true.
       nbonds=0
-      call count_bonds(bergs, nbonds,check_bond_quality)
+      call count_bonds(bergs, nbonds,check_bond_quality=check_bond_quality)
     endif
   endif
 

@@ -497,7 +497,7 @@ character(len=1), dimension(1) :: dim_names_1d
   nbonds=0
   if (bergs%iceberg_bonds_on) then
     check_bond_quality=.true.
-    call count_bonds(bergs, nbonds,check_bond_quality)
+    call count_bonds(bergs, nbonds, check_bond_quality)
 
   allocate(first_id_cnt(nbonds))
   allocate(other_id_cnt(nbonds))
@@ -1415,7 +1415,7 @@ character(len=1) :: dim_names_1d(1)
       ! Decide whether the first iceberg is on the processeor
       if ( (first_berg_ine(k)>=grd%isc) .and. (first_berg_ine(k)<=grd%iec) .and. &
         (first_berg_jne(k)>=grd%jsc) .and. (first_berg_jne(k)<=grd%jec) ) then
-        number_first_bonds_matched=number_first_bonds_matched+1
+        ! number_first_bonds_matched=number_first_bonds_matched+1
 
         ! Search for the first berg, which the bond belongs to
         first_berg_found=.false.
@@ -1425,6 +1425,7 @@ character(len=1) :: dim_names_1d(1)
           if (this%id == first_id(k)) then
             first_berg_found=.true.
             first_berg=>this
+            number_first_bonds_matched=number_first_bonds_matched+1
             !if (first_berg%halo_berg.gt.0.5) print *, 'bonding halo berg:', first_id(k),  first_berg_ine(k),first_berg_jne(k) ,grd%isc, grd%iec, mpp_pe()
             this=>null()
           else
@@ -1438,7 +1439,7 @@ character(len=1) :: dim_names_1d(1)
         !  other_berg_jne(k)>=grd%jsc-1 .and.other_berg_jne(k)<=grd%jec+1 ) then
         if ( (other_berg_ine(k)>=grd%isd) .and. (other_berg_ine(k)<=grd%ied) .and. &
           (other_berg_jne(k)>=grd%jsd) .and.(other_berg_jne(k)<=grd%jed) ) then
-          number_second_bonds_matched=number_second_bonds_matched+1
+          ! number_second_bonds_matched=number_second_bonds_matched+1
 
           ! Search for the second berg, which the bond belongs to
           second_berg=>null()
@@ -1447,6 +1448,7 @@ character(len=1) :: dim_names_1d(1)
             if (this%id == other_id(k)) then
               second_berg_found=.true.
               second_berg=>this
+              number_second_bonds_matched=number_second_bonds_matched+1
               this=>null()
             else
               this=>this%next
@@ -1512,8 +1514,10 @@ character(len=1) :: dim_names_1d(1)
     endif
 
     if (all_pe_number_perfect_bonds_with_first_on_pe .ne. nbonds_in_file) then
-      call mpp_sum(all_pe_number_first_bonds_matched)
-      call mpp_sum(all_pe_number_second_bonds_matched)
+      if (.not. (all_pe_number_perfect_bonds .lt. nbonds_in_file)) then
+        call mpp_sum(all_pe_number_first_bonds_matched)
+        call mpp_sum(all_pe_number_second_bonds_matched)
+      endif
       write(stderrunit,*)  'KID, bond read restart : ','Warning, # bonds with first bond on computational domain, does not match file',  all_pe_number_first_bonds_matched , nbonds_in_file
       write(stderrunit,*)  'KID, bond read restart : ','Computational bond, first second:', all_pe_number_second_bonds_matched , nbonds_in_file
       call error_mesg('read_restart_bonds_bergs_new', 'Computational perfect bonds do not match those in file', NOTE)

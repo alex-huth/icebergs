@@ -3180,41 +3180,50 @@ subroutine set_conglom_ids(bergs)
 
   grd=>bergs%grd
 
-  !Reset all conglom ids to zero
-  do grdj = grd%jsd,grd%jed; do grdi = grd%isd,grd%ied
-    this=>bergs%list(grdi,grdj)%first
-    do while (associated(this))
-      this%conglom_id=0
-      this=>this%next
-    enddo
-  enddo;enddo
-
-  !Set the conglom_id for conglomerate bergs that overlap the computational domain
-  new_conglom_id=0
-  do grdj = grd%jsc,grd%jec; do grdi=grd%isc,grd%iec
-    this=>bergs%list(grdi,grdj)%first
-    do while (associated(this))
-      if (this%conglom_id.eq.0) then
-        new_conglom_id=new_conglom_id+1
-        this%conglom_id=new_conglom_id
-        call label_conglomerates(this,new_conglom_id)
-      endif
-      this=>this%next
-    enddo
-  enddo;enddo
-
-  if (bergs%use_broken_bonds_for_substep_contact) then
+  if (bergs%sts_dem) then
     do grdj = grd%jsd,grd%jed; do grdi = grd%isd,grd%ied
       this=>bergs%list(grdi,grdj)%first
       do while (associated(this))
-        if (this%n_bonds<bergs%max_bonds) then
-          call remove_broken_bonds_between_congloms(this)
+        this%conglom_id=1
+        this=>this%next
+      enddo
+    enddo;enddo
+  else
+    !Reset all conglom ids to zero
+    do grdj = grd%jsd,grd%jed; do grdi = grd%isd,grd%ied
+      this=>bergs%list(grdi,grdj)%first
+      do while (associated(this))
+        this%conglom_id=0
+        this=>this%next
+      enddo
+    enddo;enddo
+
+    !Set the conglom_id for conglomerate bergs that overlap the computational domain
+    new_conglom_id=0
+    do grdj = grd%jsc,grd%jec; do grdi=grd%isc,grd%iec
+      this=>bergs%list(grdi,grdj)%first
+      do while (associated(this))
+        if (this%conglom_id.eq.0) then
+          new_conglom_id=new_conglom_id+1
+          this%conglom_id=new_conglom_id
+          call label_conglomerates(this,new_conglom_id)
         endif
         this=>this%next
       enddo
     enddo;enddo
-  endif
 
+    if (bergs%use_broken_bonds_for_substep_contact) then
+      do grdj = grd%jsd,grd%jed; do grdi = grd%isd,grd%ied
+        this=>bergs%list(grdi,grdj)%first
+        do while (associated(this))
+          if (this%n_bonds<bergs%max_bonds) then
+            call remove_broken_bonds_between_congloms(this)
+          endif
+          this=>this%next
+        enddo
+      enddo;enddo
+    endif
+  endif
 end subroutine set_conglom_ids
 
 !> Identify all bergs in the same conglomerate as the given berg, and assign them the given conglom_id
@@ -4302,6 +4311,8 @@ real :: temp_lon,temp_lat,length
           call pull_buffer_value(buff%data(:,n), counter, current_bond%rel_rotation)
           call pull_buffer_value(buff%data(:,n), counter, current_bond%broken)
         endif
+      else
+        if (dem) counter=counter+6
       endif
     enddo
   endif
@@ -5830,7 +5841,7 @@ bond_matched=.false.
   if (debug .and. (.not. new_tab_only)) then
     check_bond_quality=.true.
     nbonds=0
-    call count_bonds(bergs, nbonds,check_bond_quality)
+    call count_bonds(bergs, nbonds,check_bond_quality=check_bond_quality)
   endif
 
   if (save_bond_forces .and. link_bond_pairs .and. bergs%dem) then

@@ -744,7 +744,7 @@ subroutine ice_shelf_to_bonded_bergs(bergs, TC)
     if (debug) then
       nbonds=0
       check_bond_quality=.True.
-      call count_bonds(bergs, nbonds,check_bond_quality,tabular_calving_only=.true.)
+      call count_bonds(bergs, nbonds,check_bond_quality=check_bond_quality,tabular_calving_only=.true.)
     endif
 
     !only includes particles that just initialized
@@ -1063,7 +1063,7 @@ subroutine new_tabular_bergs_thickness_and_pressure(bergs)
           !(using the icebergs module "yearday" time convention), transition smoothly between:
           !  berg_scaling=0 for 0%   berg pressure on ocean and 100% ice shelf pressure
           !  berg_scaling=1 for 100% berg pressure on ocean and 0%   ice shelf pressure
-          T_scale = min(((bergs%current_year*366.+bergs%current_yearday)-&
+          T_scale = min(((bergs%current_year*366.+bergs%current_yearday+bergs%dt/(60.*24.))-&
                          (berg%start_year*366.+berg%start_day))*24./bergs%shelf_to_tabular_hours, 1.0)
 
           !Interpolate the T_scale to the grid to modify the ice shelf pressure felt on
@@ -1146,7 +1146,7 @@ subroutine new_tabular_bergs_thickness_and_pressure(bergs)
   call sum_up_spread_fields(bergs, frac_cberg(grd%isc:grd%iec,grd%jsc:grd%jec)       , 'frac_cberg'       , ignore_mask_in=.true.)
 
   !Adjust frac_cberg_calved and the iceberg mask
-  do grdj = grd%jsc,grd%jec ; do grdi = grd%isc,grd%iec
+  do grdj = grd%jsc-1,grd%jec+1 ; do grdi = grd%isc-1,grd%iec+1
 
     if (bergs%remove_tabular_outer_bonds_when_calve) then
       berg=>bergs%list(grdi,grdj)%first

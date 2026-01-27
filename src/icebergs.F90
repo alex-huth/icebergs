@@ -1350,7 +1350,7 @@ subroutine accel_mts(bergs, berg, i, j, xi, yj, lat, uvel, vvel, uvel0, vvel0, d
 
     ! Weighted drag coefficients (Stern et al 2017, Eqs A1-A3)
     c_ocn=rho_seawater/M*bergs%ocean_drag_scale*(0.5*Cd_wv*dragfrac*W2*(D_hi)+Cd_wh*W*L)
-    c_atm=rho_air     /M*(0.5*Cd_av*dragfrac*W2*F     +Cd_ah*W*L)
+    c_atm=rho_air     /M*bergs%atm_drag_scale*(0.5*Cd_av*dragfrac*W2*F     +Cd_ah*W*L)
     if (abs(hi).eq.0.) then
       c_ice=0.
     else
@@ -2035,7 +2035,7 @@ subroutine accel(bergs, berg, i, j, xi, yj, lat, uvel, vvel, uvel0, vvel0, dt, r
 
   ! Weighted drag coefficients (Stern et al 2017, Eqs A1-A3)
   c_ocn=rho_seawater/M*bergs%ocean_drag_scale*(0.5*Cd_wv*dragfrac*W*(D_hi)+Cd_wh*W*L)
-  c_atm=rho_air     /M*(0.5*Cd_av*dragfrac*W*F     +Cd_ah*W*L)
+  c_atm=rho_air     /M*bergs%atm_drag_scale*(0.5*Cd_av*dragfrac*W*F     +Cd_ah*W*L)
   if (abs(hi).eq.0.) then
     c_ice=0.
   else
@@ -4113,7 +4113,11 @@ subroutine interp_gridded_fields_to_bergs(bergs)
           call getRandomNumbers(rns, ry)
           ry = 2.*ry - 1.
         endif
-        if (bergs%tabular_calving) grd%msk(grdi,grdj)=1 !berg%mask_status=grd%msk(grdi,grdj)
+        if (bergs%tabular_calving) then
+          grd%msk(grdi,grdj)=1
+          grd%area(grdi,grdj)=grd%area_um(grdi,grdj)
+        endif
+        ! if (bergs%tabular_calving) berg%mask_status=grd%msk(grdi,grdj)
         call interp_flds(grd, berg%lon, berg%lat, berg%ine, berg%jne, berg%xi, berg%yj, rx, ry, berg%uo, berg%vo, &
           berg%ui, berg%vi, berg%ua, berg%va, berg%ssh_x, berg%ssh_y, berg%sst, berg%sss, berg%cn, berg%hi, berg%od)
         if (PIG_test) then
@@ -4843,7 +4847,11 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   call mpp_update_domains(grd%ua, grd%va, grd%domain, gridtype=BGRID_NE, complete=.true.)
 
   ! Copy sea surface height and temperature(resides on A grid)
-  grd%ssh(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)=ssh(:,:)
+  if (bergs%ignore_ssh) then
+    grd%ssh(:,:)=0.0
+  else
+    grd%ssh(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)=ssh(:,:)
+  endif
   if (bergs%add_iceberg_thickness_to_SSH) then
     !We might need to make sure spread_mass is defined on halos (or this might be done automatically. I need to look into this)
     do i=grd%isd,grd%ied ; do j=grd%jsd,grd%jed
@@ -4866,8 +4874,13 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   else  ! The input sst is already in degrees Celsius.
     grd%sst(grd%isc:grd%iec,grd%jsc:grd%jec) = sst(:,:) ! Note no conversion necessary.
   endif
-  grd%cn(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)=cn(:,:) * grd%msk(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)
-  grd%hi(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)=hi(:,:) * grd%msk(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)
+  if (bergs%ignore_sea_ice) then
+    grd%cn(:,:)=0.0
+    grd%hi(:,:)=0.0
+  else
+    grd%cn(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)=cn(:,:) * grd%msk(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)
+    grd%hi(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)=hi(:,:) * grd%msk(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)
+  endif
 
   ! Adding gridded salinity.
   if (present(sss)) then

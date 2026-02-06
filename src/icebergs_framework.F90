@@ -119,6 +119,7 @@ public initialize_iceberg_bonds, find_orientation_using_iceberg_bonds
 public convert_from_grid_to_meters, convert_from_meters_to_grid
 public update_halo_calved_tabular_icebergs, delete_all_bonds
 public berg_exists
+public calculate_berg_overlap
 
 !> Container for gridded fields
 type :: icebergs_gridded
@@ -9337,5 +9338,203 @@ subroutine Hexagon_into_quadrants_using_triangles(x0, y0, H, theta, Area_hex ,Ar
    endif
 
  end subroutine convert_from_meters_to_grid
+
+ !-------------TESTING NEW WAY TO CALCULATE CELL-AREA OVERLAP FOR SQUARE PARTICLES ------
+ subroutine calculate_berg_overlap(lon_c, lat_c, side_m, orient, &
+   glon_edges, glat_edges, areas)
+   real, intent(in) :: lon_c, lat_c    ! Center (deg)
+   real, intent(in) :: side_m          ! Side length (m)
+   real, intent(in) :: orient          ! Orientation (rad)
+   real, intent(in), dimension(4) :: glon_edges ! West-to-East edges
+   real, intent(in), dimension(4) :: glat_edges ! South-to-North edges
+   real, intent(out), dimension(3,3) :: areas !fraction of berg area in surrounding cells
+
+   real :: bx(4), by(4), cx(20), cy(20)
+   real :: b_min_lon, b_max_lon, b_min_lat, b_max_lat
+   real :: shifted_glon(4), shift_lon_c
+   integer  :: i, j, n_out
+
+   areas = 0.0
+
+   ! 1. Handle Longitude Wrap-around for the grid edges
+   ! We create a continuous coordinate system based on the first edge
+   shifted_glon(1) = glon_edges(1)
+   do i = 2, 4
+     shifted_glon(i) = glon_edges(i)
+     if (shifted_glon(i) < shifted_glon(i-1)) shifted_glon(i) = shifted_glon(i) + 360.0
+   end do
+
+   ! 2. Shift the iceberg center to match the grid's coordinate space
+   shift_lon_c = lon_c
+   if (shift_lon_c < shifted_glon(1) - 180.0) shift_lon_c = shift_lon_c + 360.0
+   if (shift_lon_c > shifted_glon(4) + 180.0) shift_lon_c = shift_lon_c - 360.0
+
+   ! 3. Generate the 4 corner vertices using the shifted center
+   call get_berg_vertices(shift_lon_c, lat_c, side_m, orient, bx, by)
+
+   ! 4. Shortcut Check: Bounding Box
+   b_min_lon = minval(bx); b_max_lon = maxval(bx)
+   b_min_lat = minval(by); b_max_lat = maxval(by)
+
+   if (b_min_lon >= shifted_glon(2) .and. b_max_lon <= shifted_glon(3) .and. &
+     b_min_lat >= glat_edges(2) .and. b_max_lat <= glat_edges(3)) then
+     areas(2,2) = side_m * side_m
+     return
+   end if
+
+   ! 5. Iterate through the 3x3 grid neighborhood for clipping
+   do j = 1, 3
+     do i = 1, 3
+       call clip_polygon(bx, by, 4, &
+         shifted_glon(i), shifted_glon(i+1), &
+         glat_edges(j), glat_edges(j+1), &
+         cx, cy, n_out)
+
+       if (n_out > 2) then
+         areas(i,j) = max(spherical_polygon_area(cx, cy, n_out)/(side_m*side_m),0.)
+       end if
+     end do
+   end do
+
+   ! print *,''
+   ! print *,'berg_area',side_m*side_m
+   ! print *,'areas',areas
+   !adjust the areas to the error is zero
+   areas=areas/sum(areas)
+   ! print *,'areas_adjusted',areas
+ end subroutine calculate_berg_overlap
+
+ subroutine get_berg_vertices(lon_c, lat_c, side_m, orient, bx, by)
+   real, intent(in) :: lon_c, lat_c, side_m, orient
+   real, intent(out) :: bx(4), by(4)
+   real :: d_rad, r_lon_c, r_lat_c, bearing, angle_to_corner
+   integer :: i
+
+   d_rad = (side_m * sqrt(2.0)) / Rearth
+   r_lon_c = lon_c * PI / 180.0
+   r_lat_c = lat_c * PI / 180.0
+
+   do i = 1, 4
+     angle_to_corner = (real(i)*2.0 - 1.0) * (PI / 4.0)
+     bearing = orient + angle_to_corner
+
+     by(i) = asin(sin(r_lat_c)*cos(d_rad) + &
+       cos(r_lat_c)*sin(d_rad)*cos(bearing))
+     bx(i) = r_lon_c + atan2(sin(bearing)*sin(d_rad)*cos(r_lat_c), &
+       cos(d_rad)-sin(r_lat_c)*sin(by(i)))
+
+     bx(i) = bx(i) * 180.0 / PI
+     by(i) = by(i) * 180.0 / PI
+   end do
+ end subroutine get_berg_vertices
+
+ subroutine clip_polygon(bx, by, n_in, w, e, s, n, cx, cy, n_out)
+   real, intent(in) :: bx(:), by(:), w, e, s, n
+   integer,  intent(in) :: n_in
+   real, intent(out) :: cx(:), cy(:)
+   integer,  intent(out) :: n_out
+   real :: tx(20), ty(20), px(20), py(20)
+   integer  :: nt, np
+
+   np = n_in
+   px(1:np) = bx(1:n_in); py(1:np) = by(1:n_in)
+
+   call clip_edge(px, py, np, tx, ty, nt, w, 1) ! Clip West
+   call clip_edge(tx, ty, nt, px, py, np, e, 2) ! Clip East
+   call clip_edge(px, py, np, tx, ty, nt, s, 3) ! Clip South
+   call clip_edge(tx, ty, nt, cx, cy, n_out, n, 4) ! Clip North
+ end subroutine clip_polygon
+
+ subroutine clip_edge(vin_x, vin_y, nin, vout_x, vout_y, nout, edge, side)
+   real, intent(in) :: vin_x(:), vin_y(:), edge
+   integer,  intent(in) :: nin, side
+   real, intent(out) :: vout_x(:), vout_y(:)
+   integer,  intent(out) :: nout
+   integer  :: i, prev
+   real :: x1, y1, x2, y2, ix, iy
+
+   nout = 0
+   if (nin <= 0) return
+   do i = 1, nin
+     prev = merge(nin, i - 1, i == 1)
+     x1 = vin_x(prev); y1 = vin_y(prev)
+     x2 = vin_x(i);    y2 = vin_y(i)
+
+     if (is_inside(x2, y2, edge, side)) then
+       if (.not. is_inside(x1, y1, edge, side)) then
+         call intersect(x1, y1, x2, y2, edge, side, ix, iy)
+         nout = nout + 1; vout_x(nout) = ix; vout_y(nout) = iy
+       end if
+       nout = nout + 1; vout_x(nout) = x2; vout_y(nout) = y2
+     else if (is_inside(x1, y1, edge, side)) then
+       call intersect(x1, y1, x2, y2, edge, side, ix, iy)
+       nout = nout + 1; vout_x(nout) = ix; vout_y(nout) = iy
+     end if
+   end do
+ end subroutine clip_edge
+
+ logical function is_inside(x, y, edge, side)
+   real, intent(in) :: x, y, edge
+   integer,  intent(in) :: side
+   select case(side)
+   case(1); is_inside = (x >= edge)
+   case(2); is_inside = (x <= edge)
+   case(3); is_inside = (y >= edge)
+   case(4); is_inside = (y <= edge)
+   end select
+ end function is_inside
+
+ subroutine intersect(x1, y1, x2, y2, edge, side, ix, iy)
+   real, intent(in) :: x1, y1, x2, y2, edge
+   integer,  intent(in) :: side
+   real, intent(out) :: ix, iy
+   real :: t
+   if (side <= 2) then
+     t = (edge - x1) / (x2 - x1); ix = edge; iy = y1 + t * (y2 - y1)
+   else
+     t = (edge - y1) / (y2 - y1); ix = x1 + t * (x2 - x1); iy = edge
+   end if
+ end subroutine intersect
+
+ function spherical_polygon_area(lons, lats, n) result(area)
+   real, intent(in) :: lons(:), lats(:)
+   integer,  intent(in) :: n
+   real :: area, angle_sum
+   real :: v1(3), v2(3), v3(3)
+   integer  :: i, prev, nxt
+
+   angle_sum = 0.0
+   do i = 1, n
+     prev = merge(n, i - 1, i == 1)
+     nxt  = merge(1, i + 1, i == n)
+     v1 = ll_to_xyz(lons(prev), lats(prev))
+     v2 = ll_to_xyz(lons(i), lats(i))
+     v3 = ll_to_xyz(lons(nxt), lats(nxt))
+     angle_sum = angle_sum + interior_angle(v1, v2, v3)
+   end do
+   area = (Rearth**2) * max(0.0, angle_sum - (real(n) - 2.0) * PI)
+ end function spherical_polygon_area
+
+ function interior_angle(v1, v2, v3) result(theta)
+   real, intent(in) :: v1(3), v2(3), v3(3)
+   real :: theta, n1(3), n2(3), dot_p
+   n1 = cross_prod(v2, v1); n2 = cross_prod(v2, v3)
+   n1 = n1 / sqrt(sum(n1**2)); n2 = n2 / sqrt(sum(n2**2))
+   dot_p = max(-1.0, min(1.0, sum(n1 * n2)))
+   theta = acos(dot_p)
+ end function interior_angle
+
+ function ll_to_xyz(lon_deg, lat_deg) result(v)
+   real, intent(in) :: lon_deg, lat_deg
+   real :: v(3), lo, la
+   lo = lon_deg * PI / 180.0; la = lat_deg * PI / 180.0
+   v(1) = cos(la) * cos(lo); v(2) = cos(la) * sin(lo); v(3) = sin(la)
+ end function ll_to_xyz
+
+ function cross_prod(a, b) result(c)
+   real, intent(in) :: a(3), b(3)
+   real :: c(3)
+   c(1) = a(2)*b(3) - a(3)*b(2); c(2) = a(3)*b(1) - a(1)*b(3); c(3) = a(1)*b(2) - a(2)*b(1)
+ end function cross_prod
 
 end module

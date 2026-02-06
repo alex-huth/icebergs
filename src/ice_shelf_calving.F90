@@ -16,6 +16,8 @@ use ice_bergs_framework, only : initialize_iceberg_bonds, count_bonds
 use ice_bergs_framework, only : find_cell, pos_within_cell, generate_id, rho_seawater
 use ice_bergs_framework, only : debug, footloose, connect_all_bonds, delete_all_bonds
 use ice_bergs_framework, only : update_halo_calved_tabular_icebergs, assign_n_bonds,transfer_mts_bergs
+use ice_bergs_framework, only : find_orientation_using_iceberg_bonds
+use ice_bergs_framework, only : calculate_berg_overlap
 use fms_mod, only : error_mesg, FATAL, WARNING, stderr
 
 implicit none ; private
@@ -1296,7 +1298,7 @@ subroutine begin_calving_tabular_iceberg_from_shelf(bergs, grd, lon, lat, calve_
   ! endif
 
   call calving_tabular_particle_grid_overlap(bergs, width*width, i, j, xi, yj, &
-                                             yDxL, yDxC, yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR)
+                                             yDxL, yDxC, yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR, lon, lat)
 
   if (grd%parity_x(i,j)<0.) then
     c1=-1
@@ -1507,7 +1509,7 @@ end subroutine begin_calving_tabular_iceberg_from_shelf
 !> For calving tabular bergs from the ice shelf. Save the area of overlap the particles have with each surrounding cell.
 !! If the particle does not overlap
 subroutine calving_tabular_particle_grid_overlap(bergs, Area, i, j, x, y, &
-                                                 yDxL, yDxC, yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR)
+                                                 yDxL, yDxC, yDxR, yCxL, yCxC, yCxR, yUxL, yUxC, yUxR, lon, lat)
   ! Arguments
   type(icebergs), pointer :: bergs !< Container for all types and memory
   real :: area !< Area of the iceberg that is calving
@@ -1515,6 +1517,8 @@ subroutine calving_tabular_particle_grid_overlap(bergs, Area, i, j, x, y, &
   integer, intent(in) :: j !< j-index of cell contained center of berg
   real, intent(in) :: x !< Nondimensional x-position within cell [0,1]
   real, intent(in) :: y !< Nondimensional y-position within cell [0,1]
+  real, intent(in) :: lon !< longitude of berg
+  real, intent(in) :: lat !< latitude of berg
 
   ! Local variables
   type(icebergs_gridded), pointer :: grd
@@ -1523,7 +1527,7 @@ subroutine calving_tabular_particle_grid_overlap(bergs, Area, i, j, x, y, &
   real :: S, H, origin_x, origin_y, x0, y0
   real :: Area_Q1,Area_Q2 , Area_Q3,Area_Q4, Area_hex, Area_square
   real :: tol, orientation
-  real :: Dn, Hocean
+  real :: Dn, Hocean, areas(3,3)
   ! real, parameter :: rho_seawater=1035.
   integer :: stderrunit
   logical :: zero_fill
@@ -1563,40 +1567,52 @@ subroutine calving_tabular_particle_grid_overlap(bergs, Area, i, j, x, y, &
       x0=(x-origin_x)
       y0=(y-origin_y)
 
-      call Square_into_quadrants_using_triangles(x0,y0,L,orientation,Area_square, Area_Q1, Area_Q2, Area_Q3, Area_Q4)
+!!$      call Square_into_quadrants_using_triangles(x0,y0,L,orientation,Area_square, Area_Q1, Area_Q2, Area_Q3, Area_Q4)
+!!$
+!!$      if (min(min(Area_Q1,Area_Q2),min(Area_Q3, Area_Q4)) <-tol) then
+!!$        call error_mesg('KID, square spreading', 'Intersection with square should not be negative!!!', WARNING)
+!!$        write(stderrunit,*) 'KID, yU,yC,yD', Area_Q1, Area_Q2, Area_Q3, Area_Q4
+!!$      endif
+!!$
+!!$      Area_Q1=Area_Q1/Area_square
+!!$      Area_Q2=Area_Q2/Area_square
+!!$      Area_Q3=Area_Q3/Area_square
+!!$      Area_Q4=Area_Q4/Area_square
+!!$
+!!$      !Now, you decide which quadrant belongs to which mass on ocean cell.
+!!$      if ((x.ge. 0.5) .and. (y.ge. 0.5)) then !Top right vertex
+!!$        yUxR=Area_Q1
+!!$        yUxC=Area_Q2
+!!$        yCxC=Area_Q3
+!!$        yCxR=Area_Q4
+!!$      elseif ((x .lt. 0.5) .and. (y.ge. 0.5)) then  !Top left vertex
+!!$        yUxC=Area_Q1
+!!$        yUxL=Area_Q2
+!!$        yCxL=Area_Q3
+!!$        yCxC=Area_Q4
+!!$      elseif ((x.lt.0.5) .and. (y.lt. 0.5)) then !Bottom left vertex
+!!$        yCxC=Area_Q1
+!!$        yCxL=Area_Q2
+!!$        yDxL=Area_Q3
+!!$        yDxC=Area_Q4
+!!$      elseif ((x.ge.0.5) .and. (y.lt. 0.5)) then!Bottom right vertex
+!!$        yCxR=Area_Q1
+!!$        yCxC=Area_Q2
+!!$        yDxC=Area_Q3
+!!$        yDxR=Area_Q4
+!!$      endif
 
-      if (min(min(Area_Q1,Area_Q2),min(Area_Q3, Area_Q4)) <-tol) then
-        call error_mesg('KID, square spreading', 'Intersection with square should not be negative!!!', WARNING)
-        write(stderrunit,*) 'KID, yU,yC,yD', Area_Q1, Area_Q2, Area_Q3, Area_Q4
-      endif
-
-      Area_Q1=Area_Q1/Area_square
-      Area_Q2=Area_Q2/Area_square
-      Area_Q3=Area_Q3/Area_square
-      Area_Q4=Area_Q4/Area_square
-
-      !Now, you decide which quadrant belongs to which mass on ocean cell.
-      if ((x.ge. 0.5) .and. (y.ge. 0.5)) then !Top right vertex
-        yUxR=Area_Q1
-        yUxC=Area_Q2
-        yCxC=Area_Q3
-        yCxR=Area_Q4
-      elseif ((x .lt. 0.5) .and. (y.ge. 0.5)) then  !Top left vertex
-        yUxC=Area_Q1
-        yUxL=Area_Q2
-        yCxL=Area_Q3
-        yCxC=Area_Q4
-      elseif ((x.lt.0.5) .and. (y.lt. 0.5)) then !Bottom left vertex
-        yCxC=Area_Q1
-        yCxL=Area_Q2
-        yDxL=Area_Q3
-        yDxC=Area_Q4
-      elseif ((x.ge.0.5) .and. (y.lt. 0.5)) then!Bottom right vertex
-        yCxR=Area_Q1
-        yCxC=Area_Q2
-        yDxC=Area_Q3
-        yDxR=Area_Q4
-      endif
+      call calculate_berg_overlap(lon,lat,sqrt(Area),orientation,grd%lon(i-2:i+1,j),grd%lat(i,j-2:j+1),areas)
+      ! print *,'areas',areas
+      yDxL=areas(1,1)
+      yDxC=areas(2,1)
+      yDxR=areas(3,1)
+      yCxL=areas(1,2)
+      yCxC=areas(2,2)
+      yCxR=areas(3,2)
+      yUxL=areas(1,3)
+      yUxC=areas(2,3)
+      yUxR=areas(3,3)
 
     else
       !no rotation for mass spreading. Given that bergs have not yet rotated anyway, this should be identical to the above,

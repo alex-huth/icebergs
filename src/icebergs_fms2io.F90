@@ -131,8 +131,8 @@ character(len=*), intent(in), optional :: time_stamp !< Timestamp for restart fi
 ! Local variables
 type(bond), pointer :: current_bond
 integer :: i,j,id
-character(len=35) :: filename
-character(len=35) :: filename_bonds
+character(len=256) :: filename
+character(len=256) :: filename_bonds
 type(iceberg), pointer :: this=>NULL()
 integer :: stderrunit
 !I/O vars
@@ -312,7 +312,10 @@ character(len=1), dimension(1) :: dim_names_1d
     enddo
   enddo ; enddo
 
+
   filename = "RESTART/"//trim("icebergs.res.nc")
+  if (present(time_stamp)) filename = trim(filename)//trim(time_stamp)//'.nc'
+
   dim_names_1d(1) = "i"
   if (.not. open_file(fileobj, filename, "overwrite", bergs%grd%domain, is_restart=.true.)) &
     call error_mesg('write_icebegrs_restart', "Error opening the icebergs restart file to write", FATAL)
@@ -547,6 +550,8 @@ character(len=1), dimension(1) :: dim_names_1d
   enddo; enddo !End of loop over grid
 
   filename = "RESTART/"//trim("bonds_iceberg.res.nc")
+  if (present(time_stamp)) filename = trim(filename)//trim(time_stamp)//'.nc'
+
   if (.not. open_file(fileobj, filename, "overwrite", bergs%grd%domain, is_restart=.true.)) &
     call error_mesg('write_icebegrs_restart', "Error opening the bonds icebergs restart file to write", FATAL)
 
@@ -613,6 +618,8 @@ character(len=1), dimension(1) :: dim_names_1d
 
   ! Write stored ice
   filename="RESTART/"//trim("calving.res.nc")
+  if (present(time_stamp)) filename = trim(filename)//trim(time_stamp)//'.nc'
+
   if (verbose.and.mpp_pe().eq.mpp_root_pe()) write(stderrunit,'(2a)') 'KID, write_restart: writing ',filename
   call grd_chksum3(bergs%grd, bergs%grd%stored_ice, 'write stored_ice')
   call grd_chksum2(bergs%grd, bergs%grd%stored_heat, 'write stored_heat')

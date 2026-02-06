@@ -60,6 +60,7 @@ use ice_bergs_framework, only: sum_up_spread_fields, sum_up_spread_fields, Area_
 use ice_bergs_framework, only: point_in_triangle, point_in_interval, point_is_on_the_line
 use ice_bergs_framework, only: convert_from_grid_to_meters, convert_from_meters_to_grid
 use ice_bergs_framework, only: spread_variable_across_cells, find_orientation_using_iceberg_bonds, rho_seawater
+use ice_bergs_framework, only : calculate_berg_overlap
 
 use ice_bergs_io,        only: ice_bergs_io_init, write_restart_bergs, write_trajectory, write_bond_trajectory
 use ice_bergs_io,        only: read_restart_bergs, read_restart_calving
@@ -1948,7 +1949,7 @@ subroutine accel(bergs, berg, i, j, xi, yj, lat, uvel, vvel, uvel0, vvel0, dt, r
 
   if (bergs%old_interp_flds_order) then
     call interp_flds(grd, berg%lon, berg%lat, i, j, xi, yj, rx, ry, uo, vo, ui, vi, ua, va, ssh_x, &
-      ssh_y, sst, sss, cn, hi, od)
+      ssh_y, sst, sss, cn, hi, bergs%ignore_ssh, od)
   else
     uo=berg%uo; vo=berg%vo; ua=berg%ua; va=berg%va; ui=berg%ui; vi=berg%vi;
     ssh_x=berg%ssh_x; ssh_y=berg%ssh_y; sst=berg%sst; sss=berg%sss;  cn=berg%cn; hi=berg%hi; od=berg%od
@@ -2821,7 +2822,7 @@ subroutine thermodynamics(bergs)
           if (bergs%tabular_calving) this%mask_status=grd%msk(grdi,grdj)
           call interp_flds(grd, this%lon, this%lat, this%ine, this%jne, this%xi, this%yj, 0., 0., &
             this%uo, this%vo, this%ui, this%vi, this%ua, this%va, this%ssh_x, &
-            this%ssh_y, this%sst, this%sss,this%cn, this%hi)
+            this%ssh_y, this%sst, this%sss,this%cn, this%hi, bergs%ignore_ssh)
         end if
 
       SST=this%sst
@@ -3771,6 +3772,7 @@ end subroutine calculate_density
 
 !> Spread mass of a berg around cells centered on i,j
 subroutine spread_mass_across_ocean_cells(bergs, berg, i, j, x, y, Mberg, Mbits, scaling, Area, Tn, addfootloose)
+
   ! Arguments
   type(icebergs), pointer :: bergs !< Container for all types and memory
   type(iceberg), pointer :: berg !< Berg whose mass is being considered
@@ -3794,6 +3796,7 @@ subroutine spread_mass_across_ocean_cells(bergs, berg, i, j, x, y, Mberg, Mbits,
   real :: I_fraction_used !Inverse of fraction used
   real :: tol
   real :: Dn, Hocean
+  real :: areas(3,3)
   ! real, parameter :: rho_seawater=1035.
   integer :: stderrunit
   logical :: debug
@@ -3863,41 +3866,52 @@ subroutine spread_mass_across_ocean_cells(bergs, berg, i, j, x, y, Mberg, Mbits,
       !Position of the square center, relative to origin at the nearest vertex
       x0=(x-origin_x)
       y0=(y-origin_y)
+!!$
+!!$      call Square_into_quadrants_using_triangles(x0,y0,L,orientation,Area_square, Area_Q1, Area_Q2, Area_Q3, Area_Q4)
+!!$
+!!$      if (min(min(Area_Q1,Area_Q2),min(Area_Q3, Area_Q4)) <-tol) then
+!!$        call error_mesg('KID, square spreading', 'Intersection with square should not be negative!!!', WARNING)
+!!$        write(stderrunit,*) 'KID, yU,yC,yD', Area_Q1, Area_Q2, Area_Q3, Area_Q4
+!!$      endif
+!!$
+!!$      Area_Q1=Area_Q1/Area_square
+!!$      Area_Q2=Area_Q2/Area_square
+!!$      Area_Q3=Area_Q3/Area_square
+!!$      Area_Q4=Area_Q4/Area_square
+!!$
+!!$      !Now, you decide which quadrant belongs to which mass on ocean cell.
+!!$      if ((x.ge. 0.5) .and. (y.ge. 0.5)) then !Top right vertex
+!!$        yUxR=Area_Q1
+!!$        yUxC=Area_Q2
+!!$        yCxC=Area_Q3
+!!$        yCxR=Area_Q4
+!!$      elseif ((x .lt. 0.5) .and. (y.ge. 0.5)) then  !Top left vertex
+!!$        yUxC=Area_Q1
+!!$        yUxL=Area_Q2
+!!$        yCxL=Area_Q3
+!!$        yCxC=Area_Q4
+!!$      elseif ((x.lt.0.5) .and. (y.lt. 0.5)) then !Bottom left vertex
+!!$        yCxC=Area_Q1
+!!$        yCxL=Area_Q2
+!!$        yDxL=Area_Q3
+!!$        yDxC=Area_Q4
+!!$      elseif ((x.ge.0.5) .and. (y.lt. 0.5)) then!Bottom right vertex
+!!$        yCxR=Area_Q1
+!!$        yCxC=Area_Q2
+!!$        yDxC=Area_Q3
+!!$        yDxR=Area_Q4
+!!$      endif
 
-      call Square_into_quadrants_using_triangles(x0,y0,L,orientation,Area_square, Area_Q1, Area_Q2, Area_Q3, Area_Q4)
-
-      if (min(min(Area_Q1,Area_Q2),min(Area_Q3, Area_Q4)) <-tol) then
-        call error_mesg('KID, square spreading', 'Intersection with square should not be negative!!!', WARNING)
-        write(stderrunit,*) 'KID, yU,yC,yD', Area_Q1, Area_Q2, Area_Q3, Area_Q4
-      endif
-
-      Area_Q1=Area_Q1/Area_square
-      Area_Q2=Area_Q2/Area_square
-      Area_Q3=Area_Q3/Area_square
-      Area_Q4=Area_Q4/Area_square
-
-      !Now, you decide which quadrant belongs to which mass on ocean cell.
-      if ((x.ge. 0.5) .and. (y.ge. 0.5)) then !Top right vertex
-        yUxR=Area_Q1
-        yUxC=Area_Q2
-        yCxC=Area_Q3
-        yCxR=Area_Q4
-      elseif ((x .lt. 0.5) .and. (y.ge. 0.5)) then  !Top left vertex
-        yUxC=Area_Q1
-        yUxL=Area_Q2
-        yCxL=Area_Q3
-        yCxC=Area_Q4
-      elseif ((x.lt.0.5) .and. (y.lt. 0.5)) then !Bottom left vertex
-        yCxC=Area_Q1
-        yCxL=Area_Q2
-        yDxL=Area_Q3
-        yDxC=Area_Q4
-      elseif ((x.ge.0.5) .and. (y.lt. 0.5)) then!Bottom right vertex
-        yCxR=Area_Q1
-        yCxC=Area_Q2
-        yDxC=Area_Q3
-        yDxR=Area_Q4
-      endif
+      call calculate_berg_overlap(berg%lon,berg%lat,sqrt(Area),orientation,grd%lon(i-2:i+1,j),grd%lat(i,j-2:j+1),areas)
+      yDxL=areas(1,1)
+      yDxC=areas(2,1)
+      yDxR=areas(3,1)
+      yCxL=areas(1,2)
+      yCxC=areas(2,2)
+      yCxR=areas(3,2)
+      yUxL=areas(1,3)
+      yUxC=areas(2,3)
+      yUxR=areas(3,3)
 
       !Double check that all the mass is being used.
       if ((abs(yCxC-(1.-( ((yDxL+yUxR)+(yDxR+yUxL)) + ((yCxL+yCxR)+(yDxC+yUxC)) )))>tol) .and. (mpp_pe().eq. mpp_root_pe())) then
@@ -4119,7 +4133,8 @@ subroutine interp_gridded_fields_to_bergs(bergs)
         endif
         ! if (bergs%tabular_calving) berg%mask_status=grd%msk(grdi,grdj)
         call interp_flds(grd, berg%lon, berg%lat, berg%ine, berg%jne, berg%xi, berg%yj, rx, ry, berg%uo, berg%vo, &
-          berg%ui, berg%vi, berg%ua, berg%va, berg%ssh_x, berg%ssh_y, berg%sst, berg%sss, berg%cn, berg%hi, berg%od)
+          berg%ui, berg%vi, berg%ua, berg%va, berg%ssh_x, berg%ssh_y, berg%sst, berg%sss, berg%cn, berg%hi, &
+          bergs%ignore_ssh, berg%od)
         if (PIG_test) then
           if (grd%orig_msk(grdi,grdj) /= grd%msk(grdi,grdj)) berg%ua=-6.0
         endif
@@ -4131,7 +4146,8 @@ subroutine interp_gridded_fields_to_bergs(bergs)
 end subroutine interp_gridded_fields_to_bergs
 
 !> Interpolate ocean, sea ice, and atmosphere fields from grid to iceberg
-subroutine interp_flds(grd, x, y, i, j, xi, yj, rx, ry, uo, vo, ui, vi, ua, va, ssh_x, ssh_y, sst, sss, cn, hi, od)
+subroutine interp_flds(grd, x, y, i, j, xi, yj, rx, ry, uo, vo, ui, vi, ua, va, ssh_x, ssh_y, sst, sss, cn, hi,&
+                       ignore_ssh, od)
   ! Arguments
   type(icebergs_gridded), pointer :: grd !< Container for gridded fields
   integer, intent(in) :: i !< i-index of cell in which to interpolate
@@ -4154,6 +4170,7 @@ subroutine interp_flds(grd, x, y, i, j, xi, yj, rx, ry, uo, vo, ui, vi, ua, va, 
   real, intent(out) :: sss !< Sea-surface salinity (1e-3)
   real, intent(out) :: cn !< Sea-ice concentration (nondim)
   real, intent(out) :: hi !< Sea-ice thickness (m)
+  logical, intent(in) :: ignore_ssh !< If true, returned ssh_x and ssh_y are set to zero
   real, optional, intent(out) :: od !< Ocean depth (m)
   ! Local variables
   real :: cos_rot, sin_rot, du, dv
@@ -4284,6 +4301,10 @@ subroutine interp_flds(grd, x, y, i, j, xi, yj, rx, ry, uo, vo, ui, vi, ua, va, 
   !There are some issues with the boundaries ssh gradient calculation in a finite domain. This is a temporary fix
   if (ssh_x.ne.ssh_x) ssh_x=0.
   if (ssh_y.ne.ssh_y) ssh_y=0.
+
+  if (ignore_ssh) then
+    ssh_x=0.; ssh_y=0.
+  endif
 
   if (((((uo.ne.uo) .or. (vo.ne.vo)) .or. ((ui.ne.ui) .or. (vi.ne.vi))) .or. &
        (((ua.ne.ua) .or. (va.ne.va)) .or. ((ssh_x.ne.ssh_x) .or. (ssh_y.ne.ssh_y)))) .or. &
@@ -4704,7 +4725,7 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
      !if (mod(24*iday+ihr+(imin/60.),float(bergs%verbose_hrs)).eq.0) lbudget=budget  !Added minutes, so that it does not repeat when smaller time steps are used.
      if (mod(24*iday+ihr+(imin/60.),bergs%verbose_hrs).eq.0) lbudget=budget
   endif
-  if (mpp_pe()==mpp_root_pe().and.lverbose) write(*,'(a,3i5,a,3i5,a,i5,f8.3)') &
+  if (mpp_pe()==mpp_root_pe().and.(lverbose.or.write_traj)) write(*,'(a,3i5,a,3i5,a,i5,f8.3)') &
        'KID: y,m,d=',iyr, imon, iday,' h,m,s=', ihr, imin, isec, &
        ' yr,yrdy=', bergs%current_year, bergs%current_yearday
 
@@ -4847,11 +4868,11 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
   call mpp_update_domains(grd%ua, grd%va, grd%domain, gridtype=BGRID_NE, complete=.true.)
 
   ! Copy sea surface height and temperature(resides on A grid)
-  if (bergs%ignore_ssh) then
-    grd%ssh(:,:)=0.0
-  else
-    grd%ssh(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)=ssh(:,:)
-  endif
+  !if (bergs%ignore_ssh) then
+  !  grd%ssh(:,:)=0.0 !Do not do it this way or you cannot do grounding
+  !else
+  grd%ssh(grd%isc-1:grd%iec+1,grd%jsc-1:grd%jec+1)=ssh(:,:)
+  !endif
   if (bergs%add_iceberg_thickness_to_SSH) then
     !We might need to make sure spread_mass is defined on halos (or this might be done automatically. I need to look into this)
     do i=grd%isd,grd%ied ; do j=grd%jsd,grd%jed
@@ -5860,7 +5881,7 @@ subroutine calve_icebergs(bergs)
 
             call interp_flds(grd, newberg%lon, newberg%lat, i, j, xi, yj, rx, ry, newberg%uo, newberg%vo, newberg%ui, &
               newberg%vi, newberg%ua, newberg%va, newberg%ssh_x, newberg%ssh_y, newberg%sst, newberg%sss, newberg%cn, &
-              newberg%hi, newberg%od)
+              newberg%hi, bergs%ignore_ssh, newberg%od)
           end if
 
           call add_new_berg_to_list(bergs%list(i,j)%first, newberg)

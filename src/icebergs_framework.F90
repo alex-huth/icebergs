@@ -684,6 +684,7 @@ type :: icebergs !; private !Niki: Ask Alistair why this is private. ice_bergs_i
   logical :: remove_tabular_outer_bonds_when_calve=.false. !< Removes edge particles from a calving iceberg conglomerate so that it can more easily flow away from the ice shelf
   logical :: ignore_sea_ice=.false. !< Set sea-ice thickness and concentration to zero
   logical :: ignore_ssh=.false. !< Set ssh to zero for berg calculations
+  logical :: static_bergs_on_mask=.false. !< If a berg is in a masked cell, it is a static berg
 end type icebergs
 
 !> Structure that describes the ice shelf tabualr calving state
@@ -939,6 +940,7 @@ real :: shelf_to_tabular_hours=0. !< Time (hours) over which ice shelf is transi
 logical :: remove_tabular_outer_bonds_when_calve=.false. ! Removes edge particles from a calving iceberg conglomerate so that it can more easily flow away from the ice shelf
 logical :: ignore_sea_ice=.false. !< Set sea-ice thickness and concentration to zero
 logical :: ignore_ssh=.false. !< Set ssh to zero for berg calculations
+logical :: static_bergs_on_mask=.false. !< If a berg is in a masked cell, it is a static berg
 
 namelist /icebergs_nml/ verbose, budget, halo,  traj_sample_hrs, initial_mass, traj_write_hrs, max_bonds, save_short_traj,traj_name,bond_traj_name,&
          traj_area_thres, Static_icebergs,distribution, mass_scaling, initial_thickness, verbose_hrs, spring_coef,bond_coef,&
@@ -973,7 +975,7 @@ namelist /icebergs_nml/ verbose, budget, halo,  traj_sample_hrs, initial_mass, t
          orig_dem_moment_of_inertia, break_bonds_on_sub_steps, skip_first_outer_mts_step, rev_mind, &
          no_frac_first_ts, use_grounding_torque, short_step_mts_grounding, radius_based_drag, save_bond_forces, &
          shelf_to_tabular_hours, remove_tabular_outer_bonds_when_calve, VK, ZETA_N, RC, buoy_flux_itt_threshold, &
-         PIG_test, ignore_sea_ice, ignore_ssh
+         PIG_test, ignore_sea_ice, ignore_ssh, static_bergs_on_mask
 
 ! Local variables
 integer :: ierr, iunit, i, j, id_class, axes3d(3), axes3d_b(3), is,ie,js,je,np
@@ -1634,6 +1636,7 @@ endif
   bergs%remove_tabular_outer_bonds_when_calve=remove_tabular_outer_bonds_when_calve
   bergs%ignore_sea_ice=ignore_sea_ice
   bergs%ignore_ssh=ignore_ssh
+  bergs%static_bergs_on_mask=static_bergs_on_mask
   bergs%ocean_drag_scale=ocean_drag_scale
   bergs%atm_drag_scale=atm_drag_scale
   ! Footloose calving parameters

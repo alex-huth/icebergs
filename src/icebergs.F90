@@ -4658,6 +4658,23 @@ subroutine icebergs_run(bergs, time, calving, uo, vo, ui, vi, tauxa, tauya, ssh,
 !!$      !   grd%msk(grd%isc:grd%iec,grd%jsc:grd%jec)=0.
 !!$      ! end where
 
+      ! This is for specific tests where if a berg is in a masked cell, it is treated as static
+      if (bergs%static_bergs_on_mask) then
+        call mpp_update_domains(TC%frac_shelf, grd%domain, complete=.false.)
+        call mpp_update_domains(grd%msk, grd%domain, complete=.true.)
+        do j=grd%jsd,grd%jed ; do i=grd%isd,grd%ied
+          if (grd%msk(i,j)<1 .or. TC%frac_shelf(i,j)>0) then
+            if (associated(bergs%list(i,j)%first)) then
+              berg=>bergs%list(i,j)%first
+              do while (associated(berg))
+                berg%static_berg=1.
+                berg=>berg%next
+              enddo
+            endif
+          endif
+        enddo; enddo
+      endif
+
       !correct h_shelf so that it is zero (rather than NaN) where there is no ice shelf
       do j=grd%jsc,grd%jec ; do i=grd%isc,grd%iec
         if (TC%frac_shelf(i,j)<=0) TC%h_shelf(i,j) = 0.0

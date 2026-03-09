@@ -1466,7 +1466,7 @@ character(len=1) :: dim_names_1d(1)
         if (first_berg_found) then
           number_partial_bonds=number_partial_bonds+1
           if (second_berg_found) then
-            call form_a_bond(first_berg, other_id(k), other_berg_ine(k), other_berg_jne(k),  second_berg)
+            call form_a_bond(first_berg, other_id(k), other_berg_ine(k), other_berg_jne(k))
             number_perfect_bonds=number_perfect_bonds+1
 
             current_bond=>first_berg%first_bond
